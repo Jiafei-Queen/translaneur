@@ -468,6 +468,21 @@ export default defineUnlistedScript(() => {
     hideToastBar()
   }
 
+  // Shared by both local re-translate paths (language change and
+  // "Translate"): stop (harmless even if already restored — see onTranslate
+  // below), tell the background this tab is translating again, then restart
+  // locally with the retained host rules. `showToast` controls whether
+  // startTranslation rebuilds the bar via maybeShowToast: "Translate"
+  // needs that to flip it into "translating" mode, while a language change
+  // keeps the bar it already has (rebuilding would replay the slide-in while
+  // the user is still on the select).
+  async function restartTranslation(lang: string, showToast: boolean) {
+    const rules = hostRules
+    stopTranslation(true)
+    messager.sendMessage('startSelfTab', { targetLang: lang })
+    await startTranslation(lang, showToast, rules)
+  }
+
   async function maybeShowToast() {
     // Only the top frame shows the toast bar. startTranslation is broadcast
     // to every frame (so iframe content gets translated too); without this
@@ -477,21 +492,25 @@ export default defineUnlistedScript(() => {
     if (!mobile) return
     showToastBar({
       currentLang: targetLang,
+      translating: isTranslating,
       onRestore: () => {
         dismissToast()
         stopTranslation()
         messager.sendMessage('stopSelfTab')
+      },
+      // Calling stopTranslation(true) inside restartTranslation on an
+      // already-restored page is harmless, so no idle/translating branch
+      // is needed here.
+      onTranslate: () => {
+        restartTranslation(targetLang, true)
       },
       onSettings: () => {
         dismissToast()
         messager.sendMessage('openOptionsPage')
       },
       onLangChange: async (lang) => {
-        const rules = hostRules
-        stopTranslation(true)
         await saveSettings({ targetLang: lang })
-        messager.sendMessage('startSelfTab', { targetLang: lang })
-        await startTranslation(lang, false, rules)
+        await restartTranslation(lang, false)
       },
       onResetTimer: (delayMs) => {
         if (toastTimer) {
@@ -631,8 +650,6 @@ export default defineUnlistedScript(() => {
   })
   messager.onMessage('stopTranslation', () => {
     stopTranslation()
-  })
-  messager.onMessage('showToast', () => {
     maybeShowToast()
   })
   messager.onMessage('getState', () => isTranslating)

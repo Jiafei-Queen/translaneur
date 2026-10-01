@@ -1,5 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
-import { injectLoading, replaceWithError, replaceWithTranslation, repositionTranslation } from './render'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  hideToastBar,
+  injectLoading,
+  replaceWithError,
+  replaceWithTranslation,
+  repositionTranslation,
+  showToastBar,
+  type ToastBarOptions,
+} from './render'
 import { extractBlocks, markTranslated, type TranslatableBlock } from './dom'
 
 describe('render', () => {
@@ -537,5 +545,87 @@ describe('render', () => {
     injectLoading([{ element: light, text: light.textContent!.trim() }])
     expect(hasOurStyles(rootB)).toBe(false)
     expect(document.getElementById('imp-translate-style')).not.toBeNull()
+  })
+})
+
+describe('toast bar', () => {
+  afterEach(() => {
+    document.getElementById('imp-translate-toast')?.remove()
+    document.getElementById('imp-translate-toast-style')?.remove()
+  })
+
+  function baseOptions(overrides: Partial<ToastBarOptions> = {}): ToastBarOptions {
+    return {
+      currentLang: 'zh',
+      translating: true,
+      onRestore: vi.fn(),
+      onTranslate: vi.fn(),
+      onSettings: vi.fn(),
+      onLangChange: vi.fn(),
+      ...overrides,
+    }
+  }
+
+  it('shows "Show Original" and calls onRestore while translating', () => {
+    const onRestore = vi.fn()
+    const onTranslate = vi.fn()
+    showToastBar(baseOptions({ translating: true, onRestore, onTranslate }))
+
+    const btn = document.querySelector<HTMLButtonElement>('.imp-toast-restore')!
+    expect(btn.textContent).toBe('Show Original')
+    btn.click()
+    expect(onRestore).toHaveBeenCalledOnce()
+    expect(onTranslate).not.toHaveBeenCalled()
+  })
+
+  // The mobile toolbar icon now stops translation before re-opening the
+  // panel (see openPanelForActiveTab in entrypoints/background.ts). The
+  // restored panel must still offer a way back in ("Translate") and
+  // keep the settings/language controls — it must not just be a bare
+  // "translation was restored" notice.
+  it('shows "Translate" and calls onTranslate once restored', () => {
+    const onRestore = vi.fn()
+    const onTranslate = vi.fn()
+    showToastBar(baseOptions({ translating: false, onRestore, onTranslate }))
+
+    const btn = document.querySelector<HTMLButtonElement>('.imp-toast-restore')!
+    expect(btn.textContent).toBe('Translate')
+    btn.click()
+    expect(onTranslate).toHaveBeenCalledOnce()
+    expect(onRestore).not.toHaveBeenCalled()
+  })
+
+  it('keeps the language select and settings button in the restored state', () => {
+    showToastBar(baseOptions({ translating: false, currentLang: 'ja' }))
+
+    const select = document.querySelector<HTMLSelectElement>('.imp-toast-lang')!
+    expect(select.value).toBe('ja')
+    expect(document.querySelector('.imp-toast-settings')).not.toBeNull()
+  })
+
+  // showToastBar is re-invoked whenever the panel's mode may have changed
+  // (translating → restored, or vice versa). It must rebuild in place rather
+  // than no-op on an already-mounted bar, or the stale button/handler from
+  // the previous mode would stick around.
+  it('rebuilds in place when called again with a different mode', () => {
+    showToastBar(baseOptions({ translating: true }))
+    expect(document.querySelectorAll('#imp-translate-toast')).toHaveLength(1)
+    expect(document.querySelector('.imp-toast-restore')!.textContent).toBe('Show Original')
+
+    showToastBar(baseOptions({ translating: false }))
+    expect(document.querySelectorAll('#imp-translate-toast')).toHaveLength(1)
+    expect(document.querySelector('.imp-toast-restore')!.textContent).toBe('Translate')
+  })
+
+  it('rebuilds in place even mid dismiss-animation (no stale bar left behind)', () => {
+    showToastBar(baseOptions({ translating: true }))
+    hideToastBar()
+    // The exit animation is async (fires on `animationend`), so right after
+    // calling hideToastBar the old bar is still in the DOM, mid-animation.
+    expect(document.getElementById('imp-translate-toast')).not.toBeNull()
+
+    showToastBar(baseOptions({ translating: false }))
+    expect(document.querySelectorAll('#imp-translate-toast')).toHaveLength(1)
+    expect(document.querySelector('.imp-toast-restore')!.textContent).toBe('Translate')
   })
 })

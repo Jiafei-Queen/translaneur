@@ -62,7 +62,7 @@ export async function getTabId(page: Page): Promise<number> {
 export async function sendToContentScript(
   context: BrowserContext,
   tabId: number,
-  type: 'startTranslation' | 'stopTranslation' | 'showToast' | 'getState',
+  type: 'startTranslation' | 'stopTranslation' | 'getState',
   data?: unknown,
 ): Promise<unknown> {
   const sw = await getServiceWorker(context)
@@ -125,6 +125,11 @@ export async function enableMobileMode(context: BrowserContext) {
   })
 }
 
+// Mirrors stopTranslationForTab in entrypoints/background.ts (minus the
+// setIcon call, which these tests don't assert) — the same sequence used by
+// toggleTranslationForActiveTab and, on mobile, by openPanelForActiveTab's
+// "already translating" branch (a toolbar tap there stops translation and
+// lets the content script re-open the panel itself, restored).
 export async function stopTranslation(page: Page) {
   const tabId = await getTabId(page)
   const sw = await getServiceWorker(page.context())
@@ -139,16 +144,6 @@ export async function stopTranslation(page: Page) {
   await sw.evaluate(async (tabId) => {
     await chrome.storage.session.remove(`tab_translating_${tabId}`)
   }, tabId)
-}
-
-// What the background sends to a tab that is already translating when the
-// toolbar icon is clicked on mobile (there is no popup there, so the in-page
-// toast bar is the control panel). `chrome.action.onClicked` can't be
-// dispatched from a test, so the background's branch is exercised through the
-// message it emits.
-export async function summonPanel(page: Page) {
-  const tabId = await getTabId(page)
-  await sendToContentScript(page.context(), tabId, 'showToast')
 }
 
 // The popup inspects `tabs.query({ active: true, currentWindow: true })`, so

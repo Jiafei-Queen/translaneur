@@ -53,8 +53,5 @@ export const messager = defineExtensionMessaging<{
     rules: SiteRule[]
   }): void
   stopTranslation(): void
-  // Re-open the mobile panel without touching translation state: the icon
-  // click must not stop a translation the user may want to keep.
-  showToast(): void
   getState(): boolean
 }>()

@@ -491,14 +491,26 @@ function ensureToastStyles() {
 
 export interface ToastBarOptions {
   currentLang: string
+  // Whether the page is currently translated. Drives the primary button:
+  // "Show Original" (stop) while translating, "Translate" (re-start)
+  // once restored — see entrypoints/background.ts openPanelForActiveTab,
+  // which stops translation and re-opens this panel in one mobile toolbar tap.
+  translating: boolean
   onRestore: () => void
+  onTranslate: () => void
   onSettings: () => void
   onLangChange: (lang: string) => void
   onResetTimer?: (delayMs: number) => void
 }
 
 export function showToastBar(options: ToastBarOptions) {
-  if (document.getElementById(TOAST_ID)) return
+  // Always rebuild rather than no-op on an existing bar: callers re-invoke
+  // this whenever the translating/restored mode may have changed (e.g. the
+  // mobile toolbar icon stopping translation and re-opening the panel), and
+  // a stale bar would keep showing the wrong button/handler. Removing
+  // synchronously (no exit animation) is safe even mid-dismiss — the old
+  // node's pending `animationend` listener simply never fires once detached.
+  document.getElementById(TOAST_ID)?.remove()
   ensureToastStyles()
 
   const bar = document.createElement('div')
@@ -531,8 +543,11 @@ export function showToastBar(options: ToastBarOptions) {
 
   const restoreBtn = document.createElement('button')
   restoreBtn.className = 'imp-toast-restore'
-  restoreBtn.textContent = 'Show Original'
-  restoreBtn.addEventListener('click', options.onRestore)
+  restoreBtn.textContent = options.translating ? 'Show Original' : 'Translate'
+  restoreBtn.addEventListener(
+    'click',
+    options.translating ? options.onRestore : options.onTranslate,
+  )
 
   const settingsBtn = document.createElement('button')
   settingsBtn.className = 'imp-toast-settings'

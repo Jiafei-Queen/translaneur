@@ -4,7 +4,6 @@ import {
   stopTranslation,
   configureMockProvider,
   enableMobileMode,
-  summonPanel,
 } from './helpers'
 
 const TOAST = '#imp-translate-toast'
@@ -120,13 +119,13 @@ test('toast restore button stops translation', async ({ context, baseURL }) => {
   await expect(page.locator('.imp-translate-result')).toHaveCount(0)
 })
 
-// Mobile has no action popup, so clicking the toolbar icon while translating
-// re-summons the panel instead of stopping the translation (see
-// openPanelForActiveTab in entrypoints/background.ts). The translation staying
-// on screen is what proves the click took the summon branch: a re-start would
-// have been swallowed by the content script's isTranslating guard and no bar
-// would have appeared at all.
-test('summoning the panel while translating keeps the translation', async ({
+// Mobile has no action popup, so the toolbar icon is the only way back to the
+// panel while translating — tapping it now stops translation (restoring the
+// original page) instead of just re-summoning the bar over a live
+// translation (see openPanelForActiveTab in entrypoints/background.ts). The
+// content script re-opens the panel itself, in its restored state, as part of
+// handling the stopTranslation message that stopTranslationForTab sends.
+test('toolbar tap while translating restores the page and offers "Translate"', async ({
   context,
   baseURL,
 }) => {
@@ -140,24 +139,41 @@ test('summoning the panel while translating keeps the translation', async ({
 
   const toast = page.locator(TOAST)
   await expect(toast).toBeVisible({ timeout: 5000 })
-  const translated = page.locator(TRANSLATED)
-  await expect(translated.first()).toBeVisible({ timeout: 15000 })
-  const countBefore = await translated.count()
-
-  // Let the auto-dismiss timer fire — the state the user is in when they tap
-  // the icon to reach settings or switch language
-  await expect(toast).not.toBeVisible({ timeout: 8000 })
-
-  await summonPanel(page)
-
-  await expect(toast).toBeVisible({ timeout: 3000 })
-  await expect(page.locator(LANG_SELECT)).toHaveValue('zh')
-  await expect(toast).toHaveCount(1)
-
-  // Panel is interactive on the re-summoned bar, and translation survived
-  await page.locator(`${TOAST} .imp-toast-lang`).selectOption('ja')
-  await expect(page.locator(`${TOAST} .imp-toast-lang`)).toHaveValue('ja')
   await expect(page.locator(TRANSLATED).first()).toBeVisible({ timeout: 15000 })
-  expect(await translated.count()).toBeGreaterThan(0)
-  expect(countBefore).toBeGreaterThan(0)
+
+  // Simulates a toolbar tap while translating: stops translation and lets
+  // the content script re-open the panel itself.
+  await stopTranslation(page)
+
+  await expect(page.locator('.imp-translate-result')).toHaveCount(0)
+  await expect(toast).toBeVisible({ timeout: 3000 })
+  await expect(page.locator(`${TOAST} .imp-toast-restore`)).toHaveText('Translate')
+  await expect(page.locator(LANG_SELECT)).toBeVisible()
+  await expect(page.locator(`${TOAST} .imp-toast-settings`)).toBeVisible()
+})
+
+test('clicking "Translate" re-translates and flips the button back', async ({
+  context,
+  baseURL,
+}) => {
+  const page = await context.newPage()
+  await page.goto(baseURL)
+  await page.waitForLoadState('domcontentloaded')
+
+  await configureMockProvider(page, baseURL)
+  await enableMobileMode(context)
+  await startTranslation(page, 'zh', true)
+
+  const toast = page.locator(TOAST)
+  await expect(toast).toBeVisible({ timeout: 5000 })
+  await expect(page.locator(TRANSLATED).first()).toBeVisible({ timeout: 15000 })
+
+  await stopTranslation(page)
+  await expect(toast).toBeVisible({ timeout: 3000 })
+  await expect(page.locator(`${TOAST} .imp-toast-restore`)).toHaveText('Translate')
+
+  await page.locator(`${TOAST} .imp-toast-restore`).click()
+
+  await expect(page.locator(TRANSLATED).first()).toBeVisible({ timeout: 15000 })
+  await expect(page.locator(`${TOAST} .imp-toast-restore`)).toHaveText('Show Original')
 })

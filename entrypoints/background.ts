@@ -136,20 +136,18 @@ async function toggleTranslationForActiveTab() {
 }
 
 // Mobile has no action popup, so the toolbar icon is the only way back to the
-// in-page panel (restore / settings / language): clicking it opens the panel
-// instead of toggling translation off, which is now an explicit "Show
-// original" tap. Desktop keeps its popup and the keyboard keeps the toggle.
+// in-page panel (restore / settings / language). Idle: start translation and
+// open the panel. Translating: stop (restoring the original page) — the
+// content script re-opens the panel itself, in its restored state
+// ("Translate"), as part of handling the stopTranslation message below.
+// Desktop keeps its popup and the keyboard keeps the toggle.
 async function openPanelForActiveTab() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
   if (!tab?.id) return
   if (isPdfUrl(tab.url)) return
   if (await isPageTranslating(tab.id)) {
-    try {
-      await messager.sendMessage('showToast', undefined, { tabId: tab.id })
-      return
-    } catch {
-      // Content script gone (extension reload, frame teardown) — restart below.
-    }
+    await stopTranslationForTab(tab.id)
+    return
   }
   const settings = await getSettings()
   await startTranslationForTab(tab.id, settings.targetLang, true)
@@ -358,6 +356,10 @@ export default defineBackground(() => {
     const tabId = sender.tab?.id
     if (!tabId) return
     await setTabTranslatingLang(tabId, data.targetLang)
+    // Turns the icon back on when this follows a mobile "Translate"
+    // (restored → translating); idempotent for the plain lang-change case,
+    // where the icon is already active.
+    await browser.action.setIcon({ tabId, path: activeIcon })
   })
 
   messager.onMessage('isMobile', async () => {
