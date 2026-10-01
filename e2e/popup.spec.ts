@@ -1,5 +1,10 @@
 import { test, expect } from './fixtures'
-import { configureMockProvider, openBackgroundPopup, startTranslation } from './helpers'
+import {
+  configureMockProvider,
+  openBackgroundPopup,
+  startTranslation,
+  stopTranslation,
+} from './helpers'
 
 const TRANSLATED = '.imp-translate-result:not(.imp-translate-loading)'
 
@@ -82,4 +87,31 @@ test('popup translates and restores the active tab', async ({
   await popup.getByRole('button', { name: 'Translate Page' }).click()
   await expect(page.locator(TRANSLATED).first()).toBeVisible({ timeout: 15000 })
   await expect(restore).toBeVisible({ timeout: 5000 })
+})
+
+// State changing behind the popup's back (Alt+A, the content script's
+// stopSelfTab): the popup stays open throughout, so only the storage.onChanged
+// listener in popup/main.tsx — not a fresh mount — can bring the label back.
+test('popup updates its button label when translation state changes behind its back', async ({
+  context,
+  baseURL,
+  extensionId,
+}) => {
+  const page = await context.newPage()
+  await page.goto(baseURL)
+  await page.waitForLoadState('domcontentloaded')
+
+  const popup = await openBackgroundPopup(context, extensionId)
+  await expect(popup.getByRole('button', { name: 'Translate Page' })).toBeVisible()
+
+  await startTranslation(page)
+  await expect(popup.getByRole('button', { name: 'Show Original' })).toBeVisible({
+    timeout: 5000,
+  })
+
+  await stopTranslation(page)
+
+  await expect(popup.getByRole('button', { name: 'Translate Page' })).toBeVisible({
+    timeout: 5000,
+  })
 })

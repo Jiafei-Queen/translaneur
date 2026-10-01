@@ -21,9 +21,13 @@ const settingsQuery = queryOptions({
   queryFn: getSettings,
 })
 
-const tabStateQuery = (tab: TabMeta | null) =>
+// Exported so main.tsx's storage.onChanged listener can invalidate every
+// tabState query (the ['tabState'] prefix) without duplicating the key shape.
+export const TAB_STATE_QUERY_KEY = 'tabState' as const
+
+export const tabStateQuery = (tab: TabMeta | null) =>
   queryOptions({
-    queryKey: ['tabState', tab?.id] as const,
+    queryKey: [TAB_STATE_QUERY_KEY, tab?.id] as const,
     // `enabled` only gates useQuery — fetchQuery runs the queryFn regardless,
     // so every fetchQuery call below sits behind a resolved, non-PDF tab.
     queryFn: () => messager.sendMessage('getTabState', { tabId: tab!.id }),

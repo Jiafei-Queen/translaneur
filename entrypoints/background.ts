@@ -334,8 +334,11 @@ export default defineBackground(() => {
     await stopTranslationForTab(data.tabId)
   })
 
+  // Session key only — it is what drives the action icon, so the popup can
+  // never disagree with it, and it is written before the content script
+  // flips its own state, so a storage-triggered refetch (popup/main.tsx)
+  // can't observe a half-started translation.
   messager.onMessage('getTabState', async ({ data }) => {
-    if (!(await isPageTranslating(data.tabId))) return null
     return await getTabTranslatingLang(data.tabId)
   })
 
