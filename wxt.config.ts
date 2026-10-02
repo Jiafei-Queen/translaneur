@@ -26,7 +26,7 @@ export default defineConfig({
     const manifest: UserManifest = {
       name: 'Imp Translate',
       description:
-        'Bilingual page translation with Microsoft, Google, and OpenAI-compatible APIs',
+        'Bilingual page translation shown below the original. AI translation with no API key, or bring your own provider.',
       permissions: ['storage', 'scripting', 'webNavigation', 'alarms'],
       host_permissions: ['<all_urls>'],
       author: {
