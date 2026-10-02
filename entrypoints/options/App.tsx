@@ -108,7 +108,8 @@ export function App() {
   // still valid rather than just "we have a stored key". Never calls the
   // model — see background.ts's checkConnection handler.
   useEffect(() => {
-    if (!impConnected) {
+    const imp = settings?.imp
+    if (!impConnected || !imp) {
       setConnStatus('idle')
       return
     }
@@ -117,7 +118,10 @@ export function App() {
     void (async () => {
       let next: 'connected' | 'disconnected' | 'unknown'
       try {
-        const result = await messager.sendMessage('checkConnection')
+        const result = await messager.sendMessage('checkConnection', {
+          baseUrl: imp.baseUrl,
+          apiKey: imp.apiKey,
+        })
         next = result.ok ? 'connected' : 'disconnected'
       } catch {
         next = 'unknown'
@@ -127,7 +131,7 @@ export function App() {
     return () => {
       cancelled = true
     }
-  }, [impConnected, settings?.imp?.apiKey])
+  }, [impConnected, settings?.imp?.apiKey, settings?.imp?.baseUrl])
 
   function connectImp() {
     browser.tabs.create({ url: IMP_CONNECT_URL })

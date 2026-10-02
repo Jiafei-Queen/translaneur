@@ -267,12 +267,7 @@ export default defineBackground(() => {
   // state. Deliberately calls the /me endpoint with `credentials: 'omit'` —
   // without it, a logged-in session's cookie would make a REVOKED key still
   // return 200, so the badge would show "Connected" while real requests 401.
-  messager.onMessage('checkConnection', async () => {
-    const current = await getSettings()
-    const imp = current.imp
-    if (current.provider !== 'imp' || !imp?.apiKey) {
-      return { ok: false, error: 'no Imp connection' } as const
-    }
+  messager.onMessage('checkConnection', async ({ data: imp }) => {
     try {
       // The SDK GETs {baseUrl}/me with `credentials: 'omit'` — the status
       // check must reflect the KEY only, not a logged-in session cookie (which

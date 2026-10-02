@@ -26,9 +26,14 @@ export const messager = defineExtensionMessaging<{
   // Imp Credits api key (see imp-credits docs/extension-integration.md).
   impConnect(code: string): Promise<{ ok: boolean; error?: string }>
   // options page (on mount, when an Imp connection is stored) => background:
-  // zero-cost check that the stored Imp api key is still valid (401 == revoked)
+  // zero-cost check that the given Imp api key is still valid (401 == revoked)
   // so the "Connected" badge reflects reality rather than just local state.
-  checkConnection(): Promise<{ ok: true } | { ok: false; error: string }>
+  // The caller passes the key explicitly: the options page updates its state
+  // before the storage write lands, so reading storage here would race.
+  checkConnection(data: {
+    baseUrl: string
+    apiKey: string
+  }): Promise<{ ok: true } | { ok: false; error: string }>
   getMatchedRulesForHostname(data: { hostname: string }): SiteRule[]
   startTab(data: { tabId: number; targetLang: string }): void
   stopTab(data: { tabId: number }): void
