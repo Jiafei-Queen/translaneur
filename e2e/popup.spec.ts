@@ -15,7 +15,7 @@ test('popup renders with translate button and language selector', async ({
   const page = await context.newPage()
   await page.goto(`chrome-extension://${extensionId}/popup.html`)
 
-  await expect(page.locator('text=Imp Translate')).toBeVisible()
+  await expect(page.locator('text=Translaneur')).toBeVisible()
   await expect(page.locator('text=Translate Page')).toBeVisible()
 
   const select = page.locator('#imp-lang')

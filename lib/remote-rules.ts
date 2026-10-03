@@ -2,7 +2,7 @@ import { parseRules, type SiteRule } from './rules'
 import builtinRulesRaw from '@/lib/rules.txt?raw'
 
 const RULES_URL =
-  'https://raw.githubusercontent.com/rxliuli/imp-translate/main/lib/rules.txt'
+  'https://raw.githubusercontent.com/Jiafei-Queen/translaneur/main/lib/rules.txt'
 const FETCH_INTERVAL_MS = 24 * 60 * 60 * 1000
 const ALARM_NAME = 'fetch-remote-rules'
 

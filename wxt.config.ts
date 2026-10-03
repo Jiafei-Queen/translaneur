@@ -5,15 +5,15 @@ import { PublicPath } from 'wxt/browser'
 export default defineConfig({
   modules: ['@wxt-dev/module-react', '@extport/wxt'],
   extport: {
-    extension: 'ext_uYoV9o8FAzvwJyFCBBHZ',
     safari: {
       appCategory: 'public.app-category.productivity',
-      bundleIdentifier: 'com.rxliuli.imp-translate',
-      developmentTeam: 'N2X78TUUFG',
+      bundleIdentifier: 'com.jiafei.translaneur',
     },
-    // Daily anonymous usage ping + the Firefox data-collection declaration,
-    // injected by @extport/wxt — see PRIVACY.md "Anonymous Usage Statistics".
-    analytics: true,
+    // No store registration and no analytics: the extension id inlined here
+    // would have to be one issued to *this* project, and every ping is a
+    // report to extport's operator. `developmentTeam` is likewise omitted
+    // until there is an Apple team of our own to sign with.
+    analytics: false,
   },
   vite: () => ({
     plugins: [tailwindcss()],
@@ -24,13 +24,13 @@ export default defineConfig({
   manifestVersion: 3,
   manifest: (env) => {
     const manifest: UserManifest = {
-      name: 'Imp Translate',
+      name: 'Translaneur',
       description:
         'Bilingual page translation shown below the original. AI translation with no API key, or bring your own provider.',
       permissions: ['storage', 'scripting', 'webNavigation', 'alarms'],
       host_permissions: ['<all_urls>'],
       author: {
-        email: 'rxliuli@gmail.com',
+        email: 'cxkctrl1303@hotmail.com',
       },
       action: {
         default_icon: {
@@ -48,7 +48,7 @@ export default defineConfig({
           matches: ['<all_urls>'],
         },
       ],
-      homepage_url: 'https://store.rxliuli.com/extensions/imp-translate/',
+      homepage_url: 'https://github.com/Jiafei-Queen/translaneur',
       commands: {
         'toggle-translate': {
           suggested_key: {
@@ -63,12 +63,12 @@ export default defineConfig({
         gecko: {
           id:
             manifest.name!.toLowerCase().replaceAll(/[^a-z0-9]/g, '-') +
-            '@rxliuli.com',
+            '@jiafei.dev',
         },
       }
       // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/author
       // @ts-expect-error
-      manifest.author = 'rxliuli'
+      manifest.author = 'Jiafei'
     }
     return manifest
   },

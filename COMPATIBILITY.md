@@ -1,5 +1,7 @@
 # Compatibility
 
+Site-rule coverage inherited from [rxliuli/imp-translate](https://github.com/rxliuli/imp-translate); contributions welcome.
+
 This extension targets the world's most-visited websites listed at
 [Wikipedia: List of most-visited websites](https://en.wikipedia.org/wiki/List_of_most-visited_websites).
 Every entry below is treated as first-class scope — PRs that add or

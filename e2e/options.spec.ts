@@ -7,7 +7,7 @@ test('options page renders with default settings', async ({
   const page = await context.newPage()
   await page.goto(`chrome-extension://${extensionId}/options.html`)
 
-  await expect(page.locator('text=Imp Translate')).toBeVisible()
+  await expect(page.locator('text=Translaneur')).toBeVisible()
   await expect(page.locator('text=Microsoft Translator')).toBeVisible()
   await expect(page.locator('text=Google Translate')).toBeVisible()
   await expect(page.locator('text=OpenAI Compatible')).toBeVisible()

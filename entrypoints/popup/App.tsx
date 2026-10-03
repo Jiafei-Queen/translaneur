@@ -129,7 +129,7 @@ export function App() {
       <div className="flex items-center justify-between">
         <h1 className="text-base font-semibold flex items-center gap-1.5">
           <LanguagesIcon className="w-4 h-4" />
-          Imp Translate
+          Translaneur
         </h1>
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={openOptions}>
           <SettingsIcon className="w-4 h-4" />

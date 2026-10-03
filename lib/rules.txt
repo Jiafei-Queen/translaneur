@@ -1,4 +1,4 @@
-! Imp Translate - Site-specific rules
+! Translaneur - Site-specific rules
 ! Only targets the world's top 50 most-visited websites.
 ! Reference: https://en.wikipedia.org/wiki/List_of_most-visited_websites
 !

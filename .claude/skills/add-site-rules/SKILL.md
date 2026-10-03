@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # Add site rules from a live URL
 
-The user gives a URL where Imp Translate currently mis-handles a site (some region not translated, or unrelated UI translated). Use claude-in-chrome to open the page, inspect the DOM, compare against `lib/rules.txt`, and add the minimal selectors needed.
+The user gives a URL where Translaneur currently mis-handles a site (some region not translated, or unrelated UI translated). Use claude-in-chrome to open the page, inspect the DOM, compare against `lib/rules.txt`, and add the minimal selectors needed.
 
 Rule syntax recap (uBlock-style):
 
