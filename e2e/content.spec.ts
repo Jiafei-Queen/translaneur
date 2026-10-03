@@ -1,5 +1,10 @@
 import { test, expect } from './fixtures'
-import { startTranslation, stopTranslation, configureMockProvider } from './helpers'
+import {
+  startTranslation,
+  stopTranslation,
+  configureMockProvider,
+  setSettings,
+} from './helpers'
 
 test('content script translates page', async ({ context, baseURL }) => {
   const page = await context.newPage()
@@ -351,4 +356,32 @@ test('does not adopt stylesheets into shadow roots that receive no translation',
   // Dark Reader watches adoptedStyleSheets on every shadow root and re-renders
   // on each change — GitHub has ~200 such hosts.
   expect(styles).toEqual({ tip1: false, tip2: false, frag: false, card: true })
+})
+
+test('translation-only replaces text in place preserving links', async ({ context, baseURL }) => {
+  const page = await context.newPage()
+  await page.goto(baseURL)
+  await page.waitForLoadState('domcontentloaded')
+
+  await configureMockProvider(page, baseURL)
+  await setSettings(context, { renderMode: 'translation-only' })
+  await startTranslation(page)
+
+  // The two body links are one extracted block with three runs
+  // ("Go to Page 2", "\n  ", "Open PDF"). The mock echoes the marked source
+  // with a "[翻译] " prefix, which must land in the first-appearing run's
+  // piece only — run 3 keeps its text verbatim, proving per-id alignment
+  // rather than a wholesale overwrite.
+  await expect(page.locator('#link-page2')).toHaveText('[翻译] Go to Page 2', { timeout: 15000 })
+  await expect(page.locator('#link-page2')).toHaveAttribute('href', '/page2')
+  await expect(page.locator('#link-pdf')).toHaveText('Open PDF')
+  await expect(page.locator('p').first()).toContainText(
+    '[翻译] This is the home page for testing translation.',
+  )
+  await expect(page.locator('.imp-translate-result')).toHaveCount(0)
+
+  await stopTranslation(page)
+  await expect(page.locator('#link-page2')).toHaveText('Go to Page 2', { timeout: 5000 })
+  await expect(page.locator('#link-pdf')).toHaveText('Open PDF')
+  await expect(page.locator('.imp-translate-result')).toHaveCount(0)
 })

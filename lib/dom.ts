@@ -670,8 +670,68 @@ export function markTranslated(el: HTMLElement) {
   el.setAttribute(PROCESSED_ATTR, 'true')
 }
 
+// Text-node runs of a block for translation-only rendering: the individual
+// text nodes in document order, with the same inclusion rules as
+// visibleTextOfChild so that
+//   runs.map((r) => r.data).join('') === getVisibleText(element, skipSelectors).
+export function getTranslatableRuns(element: HTMLElement, skipSelectors?: string[]): Text[] {
+  const runs: Text[] = []
+  function collect(node: Node): void {
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (node.textContent) runs.push(node as Text)
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return
+    const el = node as HTMLElement
+    if (SKIP_TAGS.has(el.tagName.toLowerCase())) return
+    if (el.classList.contains(RESULT_CLASS) || el.classList.contains('imp-translate-br')) return
+    if (el.classList.contains('notranslate')) return
+    if (el.getAttribute('translate') === 'no') return
+    if (el.isContentEditable) return
+    if (isHidden(el)) return
+    if (skipSelectors && skipSelectors.some((s) => el.matches(s))) return
+    for (const child of el.childNodes) collect(child)
+  }
+  for (const child of element.childNodes) collect(child)
+  return runs
+}
+
+// Original text of runs written by swapTextNodes. Keyed per node so repeated
+// swap cycles (mode/language switches) still restore the true original.
+const runOriginals = new WeakMap<Text, { orig: string; written: string }>()
+
+export function swapTextNodes(runs: Text[], pieces: string[]): void {
+  runs.forEach((node, i) => {
+    const piece = pieces[i]
+    if (piece === undefined || piece === node.data) return
+    const prior = runOriginals.get(node)
+    // Unchanged since our last write → keep the first original; the page
+    // rewrote it → the current content is the new baseline.
+    const orig = prior && prior.written === node.data ? prior.orig : node.data
+    runOriginals.set(node, { orig, written: piece })
+    node.data = piece
+  })
+}
+
+export function restoreTextNodes(root: ParentNode): void {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node as Text
+    const entry = runOriginals.get(text)
+    if (!entry) continue
+    // The page rewrote this node after our swap: its current content is the
+    // new truth — never clobber it with a stale original.
+    if (text.data === entry.written) text.data = entry.orig
+    runOriginals.delete(text)
+  }
+  root.querySelectorAll('*').forEach((el) => {
+    if (el.shadowRoot) restoreTextNodes(el.shadowRoot)
+  })
+}
+
 export function clearTranslations(root: Element = document.body) {
   function clearScope(scope: ParentNode) {
+    restoreTextNodes(scope)
     scope.querySelectorAll(`.${RESULT_CLASS}`).forEach((el) => el.remove())
     scope.querySelectorAll('.imp-translate-br').forEach((el) => el.remove())
     scope.querySelectorAll(`[${PROCESSED_ATTR}]`).forEach((el) => {

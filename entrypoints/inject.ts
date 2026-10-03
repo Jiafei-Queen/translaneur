@@ -10,9 +10,11 @@ import {
   type ExtractOptions,
   PROCESSED_ATTR,
   RESULT_CLASS,
+  getTranslatableRuns,
   getVisibleText,
   needsBlankLineSplit,
 } from '@/lib/dom'
+import { buildMarkedSource } from '@/lib/align'
 import {
   injectLoading,
   replaceWithTranslation,
@@ -24,7 +26,7 @@ import {
   showToastBar,
   hideToastBar,
 } from '@/lib/render'
-import { saveSettings } from '@/lib/storage'
+import { saveSettings, type RenderMode } from '@/lib/storage'
 import { isUrlOnly, debugTime } from '@/lib/utils'
 
 export default defineUnlistedScript(() => {
@@ -66,6 +68,7 @@ export default defineUnlistedScript(() => {
 
   let isTranslating = false
   let targetLang = ''
+  let renderMode: RenderMode = 'bilingual'
   let observer: MutationObserver | null = null
   const shadowObservers = new Map<ShadowRoot, MutationObserver>()
   let clickRescanTimer: ReturnType<typeof setTimeout> | null = null
@@ -90,6 +93,16 @@ export default defineUnlistedScript(() => {
     return block.element.getAttribute('data-imp-text') !== block.text
   }
 
+  // The block's source text as the pipeline sees it. translation-only blocks
+  // are marked run lists (see buildMarkedSource), which is also what
+  // data-imp-text stores after a swap — so flushRecheck never mistakes our own
+  // written translation for changed page text.
+  function currentBlockSource(el: HTMLElement): string {
+    return renderMode === 'translation-only'
+      ? buildMarkedSource(getTranslatableRuns(el, extractOpts.skipSelectors).map((r) => r.data))
+      : getVisibleText(el, extractOpts.skipSelectors).trim()
+  }
+
   function translateBatch(batch: TranslatableBlock[]) {
     const t = debugTime(`translateBatch(n=${batch.length})`)
     for (const block of batch) {
@@ -97,7 +110,10 @@ export default defineUnlistedScript(() => {
         .sendMessage('translate', { text: block.text, targetLang })
         .then((translated) => {
           if (!isTranslating || isStale(block)) return
-          replaceWithTranslation([block], [translated])
+          replaceWithTranslation([block], [translated], {
+            renderMode,
+            skipSelectors: extractOpts.skipSelectors,
+          })
           discardSelfMutations()
         })
         .catch((err) => {
@@ -105,7 +121,7 @@ export default defineUnlistedScript(() => {
           if (!isTranslating || isStale(block)) return
           replaceWithError([block], (retryBlocks) => {
             translateBatch(retryBlocks)
-          })
+          }, { renderMode, skipSelectors: extractOpts.skipSelectors })
           discardSelfMutations()
         })
     }
@@ -152,7 +168,7 @@ export default defineUnlistedScript(() => {
       // Translate what is in the DOM now, not the stale snapshot — without
       // this, the growth mutation predates the mark, so no recheck would
       // ever repair the truncated translation.
-      const current = getVisibleText(block.element, extractOpts.skipSelectors).trim()
+      const current = currentBlockSource(block.element)
       if (current && current !== block.text) block.text = current
       markTranslated(block.element)
       block.element.setAttribute('data-imp-text', block.text)
@@ -161,7 +177,9 @@ export default defineUnlistedScript(() => {
     blocks = await filterByLanguage(blocks)
     if (blocks.length === 0) return
 
-    injectLoading(blocks)
+    // translation-only keeps the source visible while loading — no spinner
+    // wrapper, zero layout shift when the pieces land.
+    if (renderMode === 'bilingual') injectLoading(blocks)
     discardSelfMutations()
     translateBatch(blocks)
   }
@@ -311,6 +329,30 @@ export default defineUnlistedScript(() => {
       observeBlocks(newBlocks)
       return
     }
+    if (renderMode === 'translation-only') {
+      el.setAttribute('data-imp-text', newText)
+      discardSelfMutations()
+      const block: TranslatableBlock = { element: el as HTMLElement, text: newText }
+      const filtered = await filterByLanguage([block])
+      if (filtered.length === 0) return
+      try {
+        const translated = await messager.sendMessage('translate', {
+          text: newText,
+          targetLang,
+        })
+        if (!isTranslating) return
+        // A newer recheck may have superseded this one while awaiting.
+        if (el.getAttribute('data-imp-text') !== newText) return
+        replaceWithTranslation([block], [translated], {
+          renderMode,
+          skipSelectors: extractOpts.skipSelectors,
+        })
+        discardSelfMutations()
+      } catch {
+        // keep current text on error (matches the bilingual behavior)
+      }
+      return
+    }
     const wrapper = el.querySelector(`.${RESULT_CLASS}`)
     if (!wrapper) {
       el.removeAttribute(PROCESSED_ATTR)
@@ -354,7 +396,7 @@ export default defineUnlistedScript(() => {
       if (!el.hasAttribute(PROCESSED_ATTR)) continue
       const storedText = el.getAttribute('data-imp-text')
       if (!storedText) continue
-      const currentText = getVisibleText(el, extractOpts.skipSelectors).trim()
+      const currentText = currentBlockSource(el as HTMLElement)
       if (storedText === currentText) continue
       retranslateElement(el, currentText)
     }
@@ -512,6 +554,11 @@ export default defineUnlistedScript(() => {
         await saveSettings({ targetLang: lang })
         await restartTranslation(lang, false)
       },
+      currentRenderMode: renderMode,
+      onRenderModeChange: async (mode) => {
+        await saveSettings({ renderMode: mode })
+        await restartTranslation(targetLang, false)
+      },
       onResetTimer: (delayMs) => {
         if (toastTimer) {
           clearTimeout(toastTimer)
@@ -538,6 +585,7 @@ export default defineUnlistedScript(() => {
       const result = await browser.storage.local.get('settings')
       const settings = result.settings as Record<string, unknown> | undefined
       debugMode = settings?.debugMode === true
+      renderMode = settings?.renderMode === 'translation-only' ? 'translation-only' : 'bilingual'
     } catch {}
   }
 

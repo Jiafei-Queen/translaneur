@@ -1,4 +1,6 @@
-import { RESULT_CLASS, PROCESSED_ATTR, type TranslatableBlock } from './dom'
+import { RESULT_CLASS, PROCESSED_ATTR, getTranslatableRuns, swapTextNodes, type TranslatableBlock } from './dom'
+import { buildMarkedSource, splitTranslation } from './align'
+import type { RenderMode } from './storage'
 import { LANGUAGES_SORTED } from './languages'
 
 function hasVisibleText(node: Node): boolean {
@@ -296,7 +298,55 @@ export function repositionTranslation(element: HTMLElement, expectedText: string
   correctTarget.insertBefore(wrapper, ref)
 }
 
-export function replaceWithTranslation(blocks: TranslatableBlock[], translations: string[]) {
+export interface RenderOpts {
+  renderMode?: RenderMode
+  skipSelectors?: string[]
+}
+
+// Removes an injected wrapper plus the spacer (`<br>` or single space) put in
+// front of it. The spacer is always our own node: trailing page whitespace
+// sits after the wrapper, never before it (see findTrailingNonTextRef).
+function removeInjectedWrapper(wrapper: Element): void {
+  const prev = wrapper.previousSibling
+  if (prev?.nodeType === Node.ELEMENT_NODE && (prev as Element).classList.contains(BR_CLASS)) {
+    prev.remove()
+  } else if (prev?.nodeType === Node.TEXT_NODE && prev.textContent === ' ') {
+    prev.remove()
+  }
+  wrapper.remove()
+}
+
+export function replaceWithTranslation(
+  blocks: TranslatableBlock[],
+  translations: string[],
+  opts?: RenderOpts,
+) {
+  if (opts?.renderMode === 'translation-only') {
+    for (let i = 0; i < blocks.length; i++) {
+      const { element, text } = blocks[i]
+      const translated = translations[i]
+      const runs = getTranslatableRuns(element, opts.skipSelectors)
+      if (runs.length === 0) continue
+      // Stale: the DOM moved under the in-flight request. The recheck pass
+      // owns recovery via the token mismatch this leaves behind.
+      if (buildMarkedSource(runs.map((r) => r.data)) !== text) continue
+      if (!translated) continue
+      element.querySelectorAll(`.${RESULT_CLASS}`).forEach(removeInjectedWrapper)
+      const { pieces, exact } = splitTranslation(translated, runs.map((r) => r.data))
+      // Fallback cuts at offsets unrelated to the run boundaries, so a block
+      // with any descendant element (link, inline styling) would get a link's
+      // own text split in half. Keep the source silently instead: a missing
+      // translation beats a clickable link leading somewhere meaningless.
+      // Leaving the token untouched also keeps recheck from retrying forever.
+      if (!exact && element.querySelector('*') !== null) continue
+      swapTextNodes(runs, pieces)
+      // Token must equal what currentBlockSource computes now that the runs
+      // hold the translated text — keeps flushRecheck self-consistent.
+      element.setAttribute('data-imp-text', buildMarkedSource(runs.map((r) => r.data)))
+    }
+    return
+  }
+
   for (let i = 0; i < blocks.length; i++) {
     const { element } = blocks[i]
     const translated = translations[i]
@@ -304,13 +354,7 @@ export function replaceWithTranslation(blocks: TranslatableBlock[], translations
     if (!wrapper) continue
 
     if (!translated || translated.toLowerCase() === blocks[i].text.toLowerCase()) {
-      const prev = wrapper.previousSibling
-      if (prev?.nodeType === Node.ELEMENT_NODE && (prev as Element).classList.contains(BR_CLASS)) {
-        prev.remove()
-      } else if (prev?.nodeType === Node.TEXT_NODE && prev.textContent === ' ') {
-        prev.remove()
-      }
-      wrapper.remove()
+      removeInjectedWrapper(wrapper)
       element.setAttribute('data-imp-noop', '')
       continue
     }
@@ -333,34 +377,70 @@ function collectAllErrorBlocks(): TranslatableBlock[] {
   return blocks
 }
 
+function appendRetryButton(
+  wrapper: HTMLElement,
+  onRetry: (blocks: TranslatableBlock[]) => void,
+) {
+  const retryBtn = document.createElement('button')
+  retryBtn.className = RETRY_CLASS
+  retryBtn.textContent = '⟳ Retry'
+  retryBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    e.preventDefault()
+    const allErrors = collectAllErrorBlocks()
+    for (const { element: el } of allErrors) {
+      const w = el.querySelector(`.${RESULT_CLASS}`)
+      if (w) {
+        w.className = `${RESULT_CLASS} ${LOADING_CLASS}`
+        w.textContent = ''
+      }
+    }
+    onRetry(allErrors)
+  }, { once: true })
+  wrapper.appendChild(retryBtn)
+}
+
 export function replaceWithError(
   blocks: TranslatableBlock[],
   onRetry: (blocks: TranslatableBlock[]) => void,
+  opts?: RenderOpts,
 ) {
-  for (const { element } of blocks) {
-    const wrapper = element.querySelector(`.${RESULT_CLASS}`)
-    if (!wrapper) continue
+  for (const { element, text } of blocks) {
+    if (opts?.renderMode === 'translation-only') {
+      ensureStyles()
+      let wrapper = element.querySelector(`.${RESULT_CLASS}`) as HTMLElement | null
+      if (!wrapper) {
+        // No loading wrapper exists in this mode (the source text is the
+        // placeholder) — anchor a small error chip at the block end using the
+        // same geometry as injectLoading.
+        const target = findInjectionPoint(element)
+        const ref = findTrailingNonTextRef(target)
+        if (text.length <= SHORT_TEXT_THRESHOLD) {
+          target.insertBefore(document.createTextNode(' '), ref)
+        } else if (!lastVisibleChildIsBlockLike(target, ref)) {
+          const br = document.createElement('br')
+          br.className = BR_CLASS
+          target.insertBefore(br, ref)
+        }
+        wrapper = document.createElement('font')
+        wrapper.className = `${RESULT_CLASS} ${ERROR_CLASS}`
+        wrapper.setAttribute('translate', 'no')
+        target.insertBefore(wrapper, ref)
+        const root = target.getRootNode()
+        if (root instanceof ShadowRoot) ensureShadowStyles(root)
+      } else {
+        wrapper.className = `${RESULT_CLASS} ${ERROR_CLASS}`
+        wrapper.textContent = ''
+      }
+      appendRetryButton(wrapper, onRetry)
+      continue
+    }
 
+    const wrapper = element.querySelector(`.${RESULT_CLASS}`) as HTMLElement | null
+    if (!wrapper) continue
     wrapper.className = `${RESULT_CLASS} ${ERROR_CLASS}`
     wrapper.textContent = ''
-
-    const retryBtn = document.createElement('button')
-    retryBtn.className = RETRY_CLASS
-    retryBtn.textContent = '⟳ Retry'
-    retryBtn.addEventListener('click', (e) => {
-      e.stopPropagation()
-      e.preventDefault()
-      const allErrors = collectAllErrorBlocks()
-      for (const { element: el } of allErrors) {
-        const w = el.querySelector(`.${RESULT_CLASS}`)
-        if (w) {
-          w.className = `${RESULT_CLASS} ${LOADING_CLASS}`
-          w.textContent = ''
-        }
-      }
-      onRetry(allErrors)
-    }, { once: true })
-    wrapper.appendChild(retryBtn)
+    appendRetryButton(wrapper, onRetry)
   }
 }
 
@@ -478,11 +558,58 @@ function ensureToastStyles() {
       background-position: right 6px center;
       flex-shrink: 0;
     }
+    #${TOAST_ID} .imp-toast-display {
+      display: flex;
+      gap: 2px;
+      padding: 2px;
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.06);
+      flex-shrink: 0;
+    }
+    #${TOAST_ID} button.imp-toast-display-btn {
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #555;
+      white-space: nowrap;
+      transition: background 0.15s, color 0.15s;
+    }
+    /* Only the unselected half responds: hovering must not dim the active
+       one into looking unselected. */
+    #${TOAST_ID} button.imp-toast-display-btn:not([aria-checked="true"]):hover {
+      background: rgba(0, 0, 0, 0.08);
+    }
+    #${TOAST_ID} button.imp-toast-display-btn[aria-checked="true"] {
+      background: #fff;
+      color: #111;
+      font-weight: 600;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+    }
     @media (prefers-color-scheme: dark) {
       #${TOAST_ID} .imp-toast-lang {
         background-color: rgba(255, 255, 255, 0.1);
         border-color: rgba(255, 255, 255, 0.15);
         background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23aaa'/%3E%3C/svg%3E");
+      }
+      #${TOAST_ID} .imp-toast-display {
+        background-color: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.15);
+      }
+      #${TOAST_ID} button.imp-toast-display-btn { color: #ccc; }
+      /* Dark: the hover fill must sit between the track (0.1) and the
+         selected half (0.18) so hovering reads as approaching the selected
+         tone. 0.12 was nearly indistinguishable from the track, making the
+         hover look broken; 0.14 stays clearly below the selected fill while
+         remaining legible against the track. Unlike the popup/options
+         control, this palette builds on white overlays, so "toward the
+         selected half" necessarily means brightening, not darkening. */
+      #${TOAST_ID} button.imp-toast-display-btn:not([aria-checked="true"]):hover {
+        background: rgba(255, 255, 255, 0.14);
+      }
+      #${TOAST_ID} button.imp-toast-display-btn[aria-checked="true"] {
+        background: rgba(255, 255, 255, 0.18);
+        color: #fff;
       }
     }
   `
@@ -500,6 +627,8 @@ export interface ToastBarOptions {
   onTranslate: () => void
   onSettings: () => void
   onLangChange: (lang: string) => void
+  currentRenderMode: RenderMode
+  onRenderModeChange: (mode: RenderMode) => void
   onResetTimer?: (delayMs: number) => void
 }
 
@@ -538,6 +667,46 @@ export function showToastBar(options: ToastBarOptions) {
     if (!justChanged) options.onResetTimer?.(15000)
   })
 
+  // Both modes shown at once rather than a <select>. Class is
+  // imp-toast-display only: e2e's LANG_SELECT targets .imp-toast-lang and
+  // must stay unambiguous.
+  const displayGroup = document.createElement('div')
+  displayGroup.className = 'imp-toast-display'
+  displayGroup.setAttribute('role', 'radiogroup')
+  displayGroup.setAttribute('aria-label', 'Display')
+  const displayButtons: HTMLButtonElement[] = []
+  const markDisplay = (mode: RenderMode) => {
+    for (const btn of displayButtons) {
+      btn.setAttribute('aria-checked', String(btn.dataset.value === mode))
+    }
+  }
+  for (const [value, label, title] of [
+    ['bilingual', 'Bilingual', 'original + translation'],
+    ['translation-only', 'Translation only', ''],
+  ] as const) {
+    const btn = document.createElement('button')
+    btn.className = 'imp-toast-display-btn'
+    btn.type = 'button'
+    btn.setAttribute('role', 'radio')
+    btn.dataset.value = value
+    btn.textContent = label
+    if (title) btn.title = title
+    btn.addEventListener('click', () => {
+      // Re-picking the active mode only pauses the timer, like opening a
+      // dropdown and closing it unchanged; picking the other one restarts.
+      if (btn.getAttribute('aria-checked') === 'true') {
+        options.onResetTimer?.(15000)
+        return
+      }
+      markDisplay(value as RenderMode)
+      options.onRenderModeChange(value as RenderMode)
+      options.onResetTimer?.(5000)
+    })
+    displayButtons.push(btn)
+    displayGroup.appendChild(btn)
+  }
+  markDisplay(options.currentRenderMode)
+
   const spacer = document.createElement('span')
   spacer.className = 'imp-toast-text'
 
@@ -554,7 +723,7 @@ export function showToastBar(options: ToastBarOptions) {
   settingsBtn.textContent = '⚙'
   settingsBtn.addEventListener('click', options.onSettings)
 
-  bar.append(langSelect, spacer, restoreBtn, settingsBtn)
+  bar.append(langSelect, displayGroup, spacer, restoreBtn, settingsBtn)
   document.body.appendChild(bar)
 }
 

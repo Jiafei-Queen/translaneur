@@ -207,7 +207,7 @@ export function App() {
             value={settings.targetLang}
             onValueChange={(v) => update({ targetLang: v })}
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger className="w-full" id="imp-lang">
               <SelectValue />
             </SelectTrigger>
             <SelectContent position="popper" className="max-h-60">
@@ -218,6 +218,53 @@ export function App() {
               ))}
             </SelectContent>
           </Select>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Display</Label>
+          <div
+            id="imp-display"
+            role="radiogroup"
+            aria-label="Display"
+            className="grid grid-cols-2 gap-1 rounded-md border border-input bg-muted p-1"
+          >
+            {(
+              [
+                ['bilingual', 'Bilingual', 'original + translation'],
+                ['translation-only', 'Translation only', ''],
+              ] as const
+            ).map(([value, label, title]) => {
+              const active = settings.renderMode === value
+              return (
+                <Button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  title={title || undefined}
+                  data-value={value}
+                  variant="ghost"
+                  size="sm"
+                  // --secondary, --muted and --accent are all oklch(0.97 0 0),
+                  // so the active half needs its own surface to read as
+                  // selected, and the unselected half needs a tint that differs
+                  // from the track.
+                  //
+                  // Hover comes from the seg-hover-* utilities, which are
+                  // !important to outrank the ghost variant's own
+                  // same-specificity hover utilities — see style.css.
+                  className={
+                    active
+                      ? 'h-8 border border-input bg-background px-2 font-semibold shadow-xs seg-hover-off-selected'
+                      : 'h-8 px-2 seg-hover-off'
+                  }
+                  onClick={() => update({ renderMode: value })}
+                >
+                  {label}
+                </Button>
+              )
+            })}
+          </div>
         </div>
 
         <div className="space-y-1.5">

@@ -1,5 +1,7 @@
 export type TranslationProvider = 'microsoft' | 'google' | 'openai' | 'imp'
 
+export type RenderMode = 'bilingual' | 'translation-only'
+
 export interface ImpProvider {
   apiKey: string
   baseUrl: string
@@ -16,6 +18,7 @@ export interface OpenAIConfig {
 export interface Settings {
   provider: TranslationProvider
   targetLang: string
+  renderMode: RenderMode
   openai: OpenAIConfig
   imp?: ImpProvider // filled in automatically by the connect flow
   developerMode: boolean
@@ -26,6 +29,7 @@ export interface Settings {
 const DEFAULT_SETTINGS: Settings = {
   provider: 'google',
   targetLang: navigator.language.split('-')[0] || 'zh',
+  renderMode: 'bilingual',
   developerMode: false,
   debugMode: false,
   customRules: '',

@@ -9,6 +9,7 @@ import {
   type ToastBarOptions,
 } from './render'
 import { extractBlocks, markTranslated, type TranslatableBlock } from './dom'
+import { buildMarkedSource } from './align'
 
 describe('render', () => {
   it('should inject inside innermost inline element', () => {
@@ -562,6 +563,8 @@ describe('toast bar', () => {
       onTranslate: vi.fn(),
       onSettings: vi.fn(),
       onLangChange: vi.fn(),
+      currentRenderMode: 'bilingual',
+      onRenderModeChange: vi.fn(),
       ...overrides,
     }
   }
@@ -627,5 +630,89 @@ describe('toast bar', () => {
     showToastBar(baseOptions({ translating: false }))
     expect(document.querySelectorAll('#imp-translate-toast')).toHaveLength(1)
     expect(document.querySelector('.imp-toast-restore')!.textContent).toBe('Translate')
+  })
+})
+
+describe('translation-only rendering', () => {
+  function runsFixture() {
+    document.body.innerHTML = '<p>Click <a href="/x">here</a> now</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const text = buildMarkedSource(['Click ', 'here', ' now'])
+    return { p, blocks: [{ element: p, text }] as TranslatableBlock[] }
+  }
+
+  it('swaps translated pieces into the text nodes in place', () => {
+    const { p, blocks } = runsFixture()
+    replaceWithTranslation(blocks, ['⟦1⟧点击⟦2⟧这里⟦3⟧立刻'], { renderMode: 'translation-only' })
+    const a = p.querySelector('a')!
+    expect(a.textContent).toBe('这里')
+    expect(a.getAttribute('href')).toBe('/x')
+    expect(p.textContent).toBe('点击这里立刻')
+    // Element tree untouched: no wrapper nodes of any kind.
+    expect(p.querySelector('font')).toBeNull()
+    // Token is the post-write marked source (flushRecheck symmetry).
+    expect(p.getAttribute('data-imp-text')).toBe('⟦1⟧点击⟦2⟧这里⟦3⟧立刻')
+  })
+
+  it('falls back to proportional splitting without markers, losing no text', () => {
+    // No descendant elements: the run boundaries are invisible, so a cut at a
+    // proportional offset is harmless.
+    document.body.innerHTML = '<p>abc</p>'
+    const p = document.querySelector('p') as HTMLElement
+    p.append(document.createTextNode('def'))
+    const blocks = [{ element: p, text: buildMarkedSource(['abc', 'def']) }] as TranslatableBlock[]
+    replaceWithTranslation(blocks, ['一二三四五六'], { renderMode: 'translation-only' })
+    expect(p.textContent).toBe('一二三四五六')
+    expect(p.querySelector('font')).toBeNull()
+  })
+
+  it('keeps the source when alignment fails inside a block with inline elements', () => {
+    // Proportional offsets cut the link's own text in half ("免"|"费百"). The
+    // source stays and the token is left as the pipeline seeded it, so recheck
+    // sees an unchanged block instead of retrying forever.
+    const { p, blocks } = runsFixture()
+    p.setAttribute('data-imp-text', blocks[0]!.text)
+    replaceWithTranslation(blocks, ['一二三四五六'], { renderMode: 'translation-only' })
+    const a = p.querySelector('a')!
+    expect(p.textContent).toBe('Click here now')
+    expect(a.textContent).toBe('here')
+    expect(a.getAttribute('href')).toBe('/x')
+    expect(p.querySelector('font')).toBeNull()
+    expect(p.getAttribute('data-imp-text')).toBe(blocks[0]!.text)
+  })
+
+  it('aligns by marker id when the provider returns markup markers', () => {
+    const { p, blocks } = runsFixture()
+    replaceWithTranslation(
+      blocks,
+      ['<x id="1"></x>点击<x id="2"></x>这里<x id="3"></x>立刻'],
+      { renderMode: 'translation-only' },
+    )
+    const a = p.querySelector('a')!
+    expect(a.textContent).toBe('这里')
+    expect(a.getAttribute('href')).toBe('/x')
+    expect(p.textContent).toBe('点击这里立刻')
+  })
+
+  it('skips stale blocks whose DOM changed under the request', () => {
+    const { p, blocks } = runsFixture()
+    ;(p.firstChild as Text).data = 'Moved '
+    replaceWithTranslation(blocks, ['⟦1⟧点击⟦2⟧这里⟦3⟧立刻'], { renderMode: 'translation-only' })
+    expect(p.textContent).toBe('Moved here now')
+  })
+
+  it('keeps the source and inserts an error chip with retry on failure', () => {
+    const { p, blocks } = runsFixture()
+    p.setAttribute('data-imp-text', blocks[0]!.text)
+    const onRetry = vi.fn()
+    replaceWithError(blocks, onRetry, { renderMode: 'translation-only' })
+    const chip = p.querySelector('font.imp-translate-error') as HTMLElement
+    expect(chip).not.toBeNull()
+    expect(chip.textContent).toBe('⟳ Retry')
+    expect(p.textContent).toContain('Click here now')
+    chip.querySelector('button')!.click()
+    expect(chip.className).toContain('imp-translate-loading')
+    expect(onRetry).toHaveBeenCalledTimes(1)
+    expect(onRetry.mock.calls[0]![0]).toHaveLength(1)
   })
 })

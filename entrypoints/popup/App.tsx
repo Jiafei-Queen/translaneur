@@ -7,7 +7,7 @@ import {
 } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { messager } from '@/lib/message'
-import { getSettings, saveSettings } from '@/lib/storage'
+import { getSettings, saveSettings, type RenderMode } from '@/lib/storage'
 import { LANGUAGES_SORTED } from '@/lib/languages'
 import { isPdfUrl } from '@/lib/utils'
 import { LanguagesIcon, SettingsIcon } from 'lucide-react'
@@ -94,6 +94,30 @@ export function App() {
     },
   })
 
+  // Display-mode change — same restart semantics as langChangeMutation:
+  // persist, then re-translate an already-translated tab with the fresh
+  // targetLang (never the closed-over one).
+  const renderModeChangeMutation = useMutation({
+    mutationFn: async (mode: RenderMode) => {
+      const updated = await saveSettings({ renderMode: mode })
+      if (tabMeta && !tabMeta.isPdf) {
+        const currentLang = await queryClient.fetchQuery(tabStateQuery(tabMeta))
+        if (currentLang) {
+          const lang = (await queryClient.fetchQuery(settingsQuery)).targetLang
+          await messager.sendMessage('stopTab', { tabId: tabMeta.id })
+          await messager.sendMessage('startTab', { tabId: tabMeta.id, targetLang: lang })
+        }
+      }
+      return updated
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(settingsQuery.queryKey, updated)
+      if (tabMeta) {
+        queryClient.invalidateQueries({ queryKey: tabStateQuery(tabMeta).queryKey })
+      }
+    },
+  })
+
   function openOptions() {
     browser.runtime.openOptionsPage()
   }
@@ -115,6 +139,7 @@ export function App() {
       <div className="space-y-2">
         <label className="text-sm text-muted-foreground">Target Language</label>
         <select
+          id="imp-lang"
           className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-sm"
           value={settings.targetLang}
           onChange={(e) => langChangeMutation.mutate(e.target.value)}
@@ -127,6 +152,54 @@ export function App() {
         </select>
       </div>
 
+      <div className="space-y-2">
+        <label className="text-sm text-muted-foreground">Display</label>
+        <div
+          id="imp-display"
+          role="radiogroup"
+          aria-label="Display"
+          className="grid grid-cols-2 gap-1 rounded-md border border-input bg-muted p-1"
+        >
+          {(
+            [
+              ['bilingual', 'Bilingual', 'original + translation'],
+              ['translation-only', 'Translation only', ''],
+            ] as const
+          ).map(([value, label, title]) => {
+            const active = settings.renderMode === value
+            return (
+              <Button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                title={title || undefined}
+                data-value={value}
+                variant="ghost"
+                size="sm"
+                // --secondary, --muted and --accent are all oklch(0.97 0 0),
+                // so the active half needs its own surface to read as
+                // selected, and the unselected half needs a tint that differs
+                // from the track. Hover comes from the seg-hover-* utilities,
+                // which are !important to outrank the ghost variant's own
+                // same-specificity hover utilities — see style.css. They
+                // replace a `hover:bg-background!` suffix, which Tailwind v4's
+                // scanner silently ignores, compiling to no rule at all.
+                className={
+                  active
+                    ? 'h-7 border border-input bg-background px-1 text-xs font-semibold shadow-xs seg-hover-off-selected'
+                    : 'h-7 px-1 text-xs seg-hover-off'
+                }
+                onClick={() => renderModeChangeMutation.mutate(value)}
+                disabled={renderModeChangeMutation.isPending}
+              >
+                {label}
+              </Button>
+            )
+          })}
+        </div>
+      </div>
+
       {tabMeta.isPdf ? (
         <p className="text-sm text-muted-foreground text-center py-1">
           PDF pages cannot be translated
@@ -135,7 +208,11 @@ export function App() {
         <Button
           className="w-full"
           onClick={() => toggleMutation.mutate()}
-          disabled={toggleMutation.isPending || langChangeMutation.isPending}
+          disabled={
+            toggleMutation.isPending ||
+            langChangeMutation.isPending ||
+            renderModeChangeMutation.isPending
+          }
         >
           {toggleMutation.isPending
             ? 'Translating...'

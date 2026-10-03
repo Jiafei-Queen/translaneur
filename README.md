@@ -4,7 +4,7 @@ An open-source, cross-platform browser extension for bilingual web page translat
 
 ## Goals
 
-- Full-page bilingual translation only — original text stays visible
+- Full-page translation with bilingual display by default — original text stays visible; an optional translation-only mode replaces text in place, keeping every original style, link, and animation
 - Zero overhead by default — no code is injected into any page until you ask for translation
 - Minimal — do one thing well, resist feature creep
 - Cross-platform — Chrome, Edge, Firefox, Safari, including mobile
@@ -12,7 +12,6 @@ An open-source, cross-platform browser extension for bilingual web page translat
 ## Non-Goals
 
 - Auto-injected UI (floating buttons, popups on hover, etc.)
-- In-place replacement translation (like Google Translate)
 - Word or sentence-level translation (selection, lookup, dictionaries)
 - Input box translation (Discord, Slack, etc.)
 - Video subtitle translation (YouTube, Netflix, etc.)
@@ -23,7 +22,8 @@ An open-source, cross-platform browser extension for bilingual web page translat
 
 ## Features
 
-- Bilingual display: translations appear below original text
+- Two render modes, switchable with a two-button toggle from the popup, options page, or mobile toast bar: bilingual (translation below the original text) and translation-only (translation replaces the text in place, preserving size, colors, clickable links, and animations)
+- Translation-only replaces text in the original text nodes, so styles, listeners, and animations survive untouched. A block whose translated segments cannot be reliably mapped back keeps its original text rather than splitting a link's wording — see [docs/translation-only-alignment.md](docs/translation-only-alignment.md)
 - Supports Google, Microsoft, Imp Credits, and OpenAI-compatible translation providers
 - Smart DOM walker: only translates visible content, handles SPAs, lazy-loaded content, and dynamic text changes
 - Site-specific rules for skipping or targeting content areas

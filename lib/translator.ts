@@ -1,3 +1,4 @@
+import { toGoogleMarkupSource } from './align'
 import type { Settings } from './storage'
 import { applyRequestInterceptors, type OpenAIRequest } from './interceptors'
 
@@ -240,7 +241,10 @@ async function translateGoogle(
   texts: string[],
   targetLang: string,
 ): Promise<TranslationResult> {
-  const escaped = texts.map(escapeHtml)
+  // Run markers must reach the endpoint as raw markup — escaping them turns
+  // them into inert text and the response comes back unmarked. See
+  // toGoogleMarkupSource for the measurements behind that.
+  const payload = texts.map((text) => toGoogleMarkupSource(text, escapeHtml))
   const resp = await fetch(
     'https://translate-pa.googleapis.com/v1/translateHtml',
     {
@@ -249,7 +253,7 @@ async function translateGoogle(
         'Content-Type': 'application/json+protobuf',
         'X-Goog-API-Key': GOOGLE_TRANSLATE_HTML_KEY,
       },
-      body: JSON.stringify([[escaped, 'auto', targetLang], 'te_lib']),
+      body: JSON.stringify([[payload, 'auto', targetLang], 'te_lib']),
     },
   )
 

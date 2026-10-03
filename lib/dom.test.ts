@@ -1,5 +1,14 @@
 import { describe, expect, it, beforeEach } from 'vitest'
-import { extractBlocks, clearTranslations, getVisibleBlocks, markTranslated, PROCESSED_ATTR } from './dom'
+import {
+  extractBlocks,
+  clearTranslations,
+  getVisibleBlocks,
+  markTranslated,
+  PROCESSED_ATTR,
+  getVisibleText,
+  getTranslatableRuns,
+  swapTextNodes,
+} from './dom'
 
 describe('extractBlocks', () => {
   beforeEach(() => {
@@ -1134,5 +1143,54 @@ describe('extractBlocks', () => {
       const again = extractBlocks(document.body)
       expect(again).toHaveLength(0)
     })
+  })
+})
+
+describe('translation-only runs', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('collects text runs matching getVisibleText exactly', () => {
+    document.body.innerHTML =
+      '<p>Click <a href="/x">here</a> <span class="notranslate">skip</span><span style="display:none">hidden</span></p>'
+    const p = document.querySelector('p') as HTMLElement
+    const runs = getTranslatableRuns(p)
+    // Whitespace-only nodes are runs of their own; skipped subtrees
+    // contribute nothing.
+    expect(runs.map((r) => r.data)).toEqual(['Click ', 'here', ' '])
+    expect(runs.map((r) => r.data).join('')).toBe(getVisibleText(p))
+  })
+
+  it('honors skipSelectors like getVisibleText', () => {
+    document.body.innerHTML = '<p>Click <a href="/x">here</a> now</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const runs = getTranslatableRuns(p, ['a'])
+    expect(runs.map((r) => r.data).join('')).toBe(getVisibleText(p, ['a']))
+  })
+
+  it('swaps pieces in place and restores originals through clearTranslations', () => {
+    document.body.innerHTML = '<p>Click <a href="/x">here</a> now</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const runs = getTranslatableRuns(p)
+    swapTextNodes(runs, ['点击', '这里', ' 立刻'])
+    expect(p.textContent).toBe('点击这里 立刻')
+    // A second swap cycle must still restore the true original.
+    swapTextNodes(runs, ['A', 'B', ' C'])
+    expect(p.textContent).toBe('AB C')
+    clearTranslations(document.body)
+    expect(p.textContent).toBe('Click here now')
+  })
+
+  it('does not clobber page rewrites on restore', () => {
+    document.body.innerHTML = '<p>Click <a href="/x">here</a> now</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const runs = getTranslatableRuns(p)
+    swapTextNodes(runs, ['点击', '这里', ' 立刻'])
+    runs[0]!.data = '页面更新'
+    clearTranslations(document.body)
+    expect(runs[0]!.data).toBe('页面更新')
+    expect(runs[1]!.data).toBe('here')
+    expect(runs[2]!.data).toBe(' now')
   })
 })

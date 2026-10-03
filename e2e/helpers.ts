@@ -36,6 +36,23 @@ export async function setCustomRules(context: BrowserContext, rules: string) {
   }, rules)
 }
 
+// Merge-writes a settings patch (like setCustomRules). configureMockProvider
+// replaces the whole settings object, so call this AFTER it when patching
+// fields it doesn't set (e.g. renderMode).
+export async function setSettings(
+  context: BrowserContext,
+  patch: Record<string, unknown>,
+) {
+  const sw = await getServiceWorker(context)
+  await sw.evaluate(async (patch) => {
+    const existing = ((await chrome.storage.local.get('settings')).settings ?? {}) as Record<
+      string,
+      unknown
+    >
+    await chrome.storage.local.set({ settings: { ...existing, ...patch } })
+  }, patch)
+}
+
 export async function getServiceWorker(context: BrowserContext) {
   let [sw] = context.serviceWorkers()
   if (!sw) sw = await context.waitForEvent('serviceworker')

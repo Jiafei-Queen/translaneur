@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { splitTranslation } from './align'
 import { chatCompletionsUrl, decodeHTML } from './translator'
 import type { Settings } from './storage'
 
@@ -62,6 +63,7 @@ describe('decodeHTML', () => {
 const openaiSettings: Settings = {
   provider: 'openai',
   targetLang: 'zh',
+  renderMode: 'bilingual',
   developerMode: false,
   debugMode: false,
   customRules: '',
@@ -210,6 +212,7 @@ vi.mock('./cache', () => ({
 const msSettings: Settings = {
   provider: 'microsoft',
   targetLang: 'zh',
+  renderMode: 'bilingual',
   developerMode: false,
   debugMode: false,
   customRules: '',
@@ -511,6 +514,7 @@ describe('chunked concurrent translation', () => {
 const impSettings: Settings = {
   provider: 'imp',
   targetLang: 'zh',
+  renderMode: 'bilingual',
   developerMode: false,
   debugMode: false,
   customRules: '',
@@ -628,5 +632,75 @@ describe('Imp Credits translate', () => {
     await expect(translate(['Hello'], 'zh', impSettings)).rejects.toThrow(
       'Rate limited',
     )
+  })
+})
+
+const googleSettings: Settings = { ...msSettings, provider: 'google' }
+
+describe('Google translateHtml marker passthrough', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.restoreAllMocks()
+    cacheStore.clear()
+  })
+
+  function mockGoogleResponse(texts: string[]) {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => [texts, ['en']],
+    })
+    return fetchMock
+  }
+
+  function sentTexts(fetchMock: ReturnType<typeof mockGoogleResponse>): string[] {
+    return JSON.parse(fetchMock.mock.calls[0]![1].body as string)[0][0]
+  }
+
+  it('sends run markers as raw markup and escapes only run text', async () => {
+    const fetchMock = mockGoogleResponse(['<x id="1"></x>甲<x id="2"></x>乙'])
+    const { translate } = await import('./translator')
+
+    await translate(['⟦1⟧a <b>⟦2⟧b'], 'zh', googleSettings)
+
+    expect(sentTexts(fetchMock)).toEqual([
+      '<x id="1"></x>a &lt;b&gt;<x id="2"></x>b',
+    ])
+  })
+
+  it('escapes unmarked bilingual text exactly as before', async () => {
+    const fetchMock = mockGoogleResponse(['Tom &amp; Jerry'])
+    const { translate } = await import('./translator')
+
+    const result = await translate(['Tom & <b>Jerry'], 'zh', googleSettings)
+
+    expect(sentTexts(fetchMock)).toEqual(['Tom &amp; &lt;b&gt;Jerry'])
+    expect(result.texts).toEqual(['Tom & Jerry'])
+  })
+
+  it('falls back to proportional cuts when the endpoint drops markers', async () => {
+    // Real Google zh response for the Wikipedia tagline: 5 marked runs in, 4
+    // markers back. Aligning by source length is what cut "免费百科全书" into
+    // "免" | "费百" | "科全书" across the link boundary — the content script
+    // now refuses those pieces for blocks with visible run boundaries.
+    const fetchMock = mockGoogleResponse([
+      '⟦1⟧免费⟦2⟧百科全书，⟦3⟧任何人⟦4⟧都可以编辑。',
+    ])
+    const { translate } = await import('./translator')
+
+    const result = await translate(
+      ['⟦1⟧the ⟦2⟧free⟦3⟧ encyclopedia that ⟦4⟧anyone⟦5⟧ can edit.'],
+      'zh',
+      googleSettings,
+    )
+
+    expect(sentTexts(fetchMock)).toEqual([
+      '<x id="1"></x>the <x id="2"></x>free<x id="3"></x> encyclopedia that <x id="4"></x>anyone<x id="5"></x> can edit.',
+    ])
+    const runs = ['the ', 'free', ' encyclopedia that ', 'anyone', ' can edit.']
+    const split = splitTranslation(result.texts[0]!, runs)
+    expect(split.exact).toBe(false)
+    expect(split.pieces).toEqual(['免', '费百', '科全书，任何人', '都可', '以编辑。'])
   })
 })

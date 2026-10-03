@@ -23,6 +23,9 @@
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
   --radius: 0.625rem;
+  /* Translucent near-black over the light track; the dark block below
+     overrides it. */
+  --seg-hover: color-mix(in oklab, var(--foreground) 10%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -46,6 +49,11 @@
   --border: oklch(0.269 0 0);
   --input: oklch(0.269 0 0);
   --ring: oklch(0.439 0 0);
+  /* Hover fill for the segmented display control: deliberately between
+     --background (0.145, the selected half) and --muted (0.269, the track),
+     so hover darkens toward the selected tone instead of brightening. It
+     cannot mix --foreground, which is 0.985 here and would lighten. */
+  --seg-hover: oklch(0.228 0 0);
 }
 }
 
@@ -80,4 +88,26 @@
 }
 body {
   @apply bg-background text-foreground;
+}
+
+/* Segmented display-mode control.
+   The ghost button variant ships hover:bg-accent, hover:text-accent-foreground
+   and dark:hover:bg-accent/50. All three are same-specificity utilities, and
+   Tailwind emits them *after* custom @utility blocks for this file, so
+   ordering alone leaves them winning. In dark mode dark:hover:bg-accent/50
+   resolves to --accent (oklch(0.269 0 0)) — the very same grey as the
+   --muted track — so the *selected* half turned grey on hover: hover
+   feedback landed on the already-selected option. Hence the `!important`
+   below, which settles it in both colour schemes. */
+@utility seg-hover-off {
+  &:hover {
+    background-color: var(--seg-hover) !important;
+    color: var(--foreground) !important;
+  }
+}
+@utility seg-hover-off-selected {
+  &:hover {
+    background-color: var(--background) !important;
+    color: var(--foreground) !important;
+  }
 }

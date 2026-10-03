@@ -177,3 +177,89 @@ test('clicking "Translate" re-translates and flips the button back', async ({
   await expect(page.locator(TRANSLATED).first()).toBeVisible({ timeout: 15000 })
   await expect(page.locator(`${TOAST} .imp-toast-restore`)).toHaveText('Show Original')
 })
+
+test('toast display select switches render mode on mobile', async ({ context, baseURL }) => {
+  const page = await context.newPage()
+  await page.goto(baseURL)
+  await page.waitForLoadState('domcontentloaded')
+
+  await configureMockProvider(page, baseURL)
+  await enableMobileMode(context)
+  await startTranslation(page, 'ja', true)
+
+  await expect(page.locator(TOAST)).toBeVisible({ timeout: 5000 })
+  const displayGroup = page.locator(`${TOAST} .imp-toast-display`)
+  await expect(displayGroup.locator('[data-value="bilingual"]')).toHaveAttribute(
+    'aria-checked',
+    'true',
+  )
+  await expect(page.locator(TRANSLATED).first()).toBeVisible({ timeout: 15000 })
+
+  await displayGroup.locator('[data-value="translation-only"]').click()
+
+  await expect(page.locator('.imp-translate-result')).toHaveCount(0, { timeout: 15000 })
+  await expect(page.locator('p').first()).toContainText('[翻译]', { timeout: 15000 })
+})
+
+// The toast draws its own CSS rather than using the ghost Button, and carries
+// a separate `@media (prefers-color-scheme: dark)` block. Both are easy to
+// get backwards, so assert hover direction in each scheme: the active half
+// must not respond, the inactive one must.
+for (const scheme of ['light', 'dark'] as const) {
+  test(`toast display hover only the unselected half in ${scheme} mode`, async ({
+    context,
+    baseURL,
+  }) => {
+    const page = await context.newPage()
+    await page.emulateMedia({ colorScheme: scheme })
+    await page.goto(baseURL)
+    await page.waitForLoadState('domcontentloaded')
+
+    await configureMockProvider(page, baseURL)
+    await enableMobileMode(context)
+    await startTranslation(page, 'ja', true)
+
+    await expect(page.locator(TOAST)).toBeVisible({ timeout: 5000 })
+    const group = page.locator(`${TOAST} .imp-toast-display`)
+    const selected = group.locator('[data-value="bilingual"]')
+    const unselected = group.locator('[data-value="translation-only"]')
+    await expect(selected).toHaveAttribute('aria-checked', 'true')
+
+    const snap = (loc: typeof selected) =>
+      loc.evaluate((el) => {
+        const s = getComputedStyle(el)
+        return `${s.backgroundColor} | ${s.color}`
+      })
+
+    const selectedIdle = await snap(selected)
+    const unselectedIdle = await snap(unselected)
+
+    await selected.hover()
+    await page.waitForTimeout(200)
+    expect(
+      await snap(selected),
+      'selected half must not react to hover',
+    ).toBe(selectedIdle)
+
+    await unselected.hover()
+    await page.waitForTimeout(200)
+    expect(
+      await snap(unselected),
+      'unselected half must react to hover',
+    ).not.toBe(unselectedIdle)
+
+    // The hover fill must land strictly between the track and the selected
+    // half, so it reads as "closer to selected" rather than as an unrelated
+    // highlight. Both palettes stack white overlays, so that means a
+    // higher alpha than the track and a lower one than the selected fill.
+    const alpha = (c: string) => {
+      const m = /rgba?\([^)]*?([\d.]+)\s*\)$/.exec(c)
+      return m ? Number(m[1]) : c === 'rgb(255, 255, 255)' ? 1 : 0
+    }
+    const trackAlpha = alpha(await group.evaluate((el) => getComputedStyle(el).backgroundColor))
+    const selectedFill = alpha(await snap(selected).then((s) => s.split(' | ')[0]))
+    const hoverAlpha = alpha((await snap(unselected)).split(' | ')[0])
+    expect(hoverAlpha).toBeGreaterThan(trackAlpha)
+    expect(hoverAlpha).toBeLessThan(selectedFill)
+  })
+}
