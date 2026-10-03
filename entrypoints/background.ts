@@ -76,6 +76,18 @@ const activeIcon: Record<number, PublicPath> = {
   128: '/icon/active/128-active.png',
 }
 
+// Main-frame onCommitted handlers still running, keyed by tab. Sub-frames
+// reach onDOMContentLoaded independently and can beat it, reading the session
+// key before the reload branch has cleared it and re-translating a frame on a
+// page that was just reloaded. Both listeners are async, so nothing orders
+// them; sub-frames wait here instead.
+const commitInFlight = new Map<number, Promise<void>>()
+
+async function awaitMainFrameCommit(tabId: number): Promise<void> {
+  const pending = commitInFlight.get(tabId)
+  if (pending) await pending
+}
+
 async function startTranslationForTab(
   tabId: number,
   targetLang: string,
@@ -381,22 +393,32 @@ export default defineBackground(() => {
   // earliest event we can hook — so the icon doesn't blink to default during
   // link nav. If the navigation turns out to be a reload, the reload branch
   // in onDOMContentLoaded below will revert it.
-  browser.webNavigation.onCommitted.addListener(async (details) => {
+  browser.webNavigation.onCommitted.addListener((details) => {
     if (details.frameId !== 0) return
-    const lang = await getTabTranslatingLang(details.tabId)
-    if (!lang) return
-    // A reload (or navigating to a PDF) stops translation. Detect the reload
-    // here at commit — the earliest available event — and clear the
-    // translating state now, so that sub-frame onDOMContentLoaded handlers
-    // below don't read a stale "translating" key and re-translate an iframe
-    // on a page that was just reloaded. The performance.navigation check in
-    // onDOMContentLoaded remains as a backstop for cases transitionType misses.
-    if (details.transitionType === 'reload' || isPdfUrl(details.url)) {
-      await setTabTranslatingLang(details.tabId, null)
-      await browser.action.setIcon({ tabId: details.tabId, path: defaultIcon })
-      return
-    }
-    await browser.action.setIcon({ tabId: details.tabId, path: activeIcon })
+    // Publish the whole handler as an in-flight promise so a sub-frame's
+    // onDOMContentLoaded can wait for the reload decision before reading the
+    // session key (see commitInFlight). Covers the `!lang` early return too, so
+    // a sub-frame never waits on a promise that was never registered.
+    const done = (async () => {
+      const lang = await getTabTranslatingLang(details.tabId)
+      if (!lang) return
+      // A reload (or navigating to a PDF) stops translation. Detect the reload
+      // here at commit — the earliest available event — and clear the
+      // translating state now, so that sub-frame onDOMContentLoaded handlers
+      // below don't read a stale "translating" key and re-translate an iframe
+      // on a page that was just reloaded. The performance.navigation check in
+      // onDOMContentLoaded remains as a backstop for cases transitionType misses.
+      if (details.transitionType === 'reload' || isPdfUrl(details.url)) {
+        await setTabTranslatingLang(details.tabId, null)
+        await browser.action.setIcon({ tabId: details.tabId, path: defaultIcon })
+        return
+      }
+      await browser.action.setIcon({ tabId: details.tabId, path: activeIcon })
+    })()
+    commitInFlight.set(details.tabId, done)
+    void done.finally(() => {
+      if (commitInFlight.get(details.tabId) === done) commitInFlight.delete(details.tabId)
+    })
   })
 
   browser.webNavigation.onDOMContentLoaded.addListener(async (details) => {
@@ -409,6 +431,8 @@ export default defineBackground(() => {
     // correct: only inject + start this specific frame when the tab is
     // genuinely translating.
     if (details.frameId !== 0) {
+      // Ordering barrier, see commitInFlight.
+      await awaitMainFrameCommit(details.tabId)
       const lang = await getTabTranslatingLang(details.tabId)
       if (!lang) return
       // Transient sub-frames (ad/embed iframes, especially common on Reddit)

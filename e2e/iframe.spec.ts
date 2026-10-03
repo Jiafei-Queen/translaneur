@@ -60,11 +60,27 @@ test('reload stops translation in iframes too (no stale re-translate)', async ({
   await page.reload()
   await page.waitForLoadState('domcontentloaded')
 
-  // Give any erroneous (stale) translation a chance to appear, then assert
-  // neither the main page nor the iframe got translated.
-  await page.waitForTimeout(2000)
-  await expect(page.locator(TRANSLATED_SELECTOR)).toHaveCount(0)
-  await expect(largeFrame.locator(TRANSLATED_SELECTOR)).toHaveCount(0)
+  // The invariant is "no stale translation ever appears", not "none within N
+  // ms". Poll across the whole observation window and fail on the first
+  // sighting, instead of sleeping and then asserting once: a fixed 2s sleep
+  // followed by toHaveCount's own 5s timeout meant a re-translate landing
+  // after the sleep but inside the timeout failed the test, while the same
+  // run passed standalone — the result depended on suite load. Sampling
+  // throughout keeps the assertion honest either way.
+  // The window covers the cross-frame race under test: inject.ts's pageshow
+  // handler waits 100ms and re-checks the session key before stopping.
+  const deadline = Date.now() + 3000
+  while (Date.now() < deadline) {
+    expect(
+      await page.locator(TRANSLATED_SELECTOR).count(),
+      'main frame must not re-translate after reload',
+    ).toBe(0)
+    expect(
+      await largeFrame.locator(TRANSLATED_SELECTOR).count(),
+      'iframe must not re-translate after reload',
+    ).toBe(0)
+    await page.waitForTimeout(100)
+  }
 })
 
 test('skips translation inside a tiny iframe', async ({ context, baseURL }) => {
