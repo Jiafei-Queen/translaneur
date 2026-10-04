@@ -118,6 +118,43 @@ The rate-limit window lives in memory and is lost when the browser suspends the 
 worker. That is deliberate: the cap exists to avoid 429s, and a cold worker has at most one
 request of its own to lose.
 
+## Batch context
+
+A multi-text request is not a bag of unrelated strings. The blocks in one request
+are consecutive segments of a single document, in reading order, and the system
+prompt says so:
+
+> The blocks are consecutive segments of a single document, in reading order.
+> Translate them as one coherent whole: keep terminology consistent across
+> blocks, and disambiguate polysemous words using the surrounding blocks.
+
+This is the cheapest disambiguation available and it is nearly free — the
+neighbours are already in the request, so nothing extra is sent per block. It
+matters most for short blocks (headings, nav items, captions), where the segment
+alone rarely settles a polysemous word: `Non-goal` is 非目标 beside the rest of a
+design document and 未进球 beside a match report.
+
+Two consequences:
+
+- **It applies to batches only.** A single-block request has no neighbours, so
+  the instruction is omitted rather than sent as something the model cannot act
+  on.
+- **It makes a promise the batching layer has to keep.** Two documents must
+  never share a request, or the model is told that blocks which are not adjacent
+  are. The batch queue is therefore keyed by scope — one frame of one tab —
+  rather than by language alone. A page and its ad iframe, or two tabs
+  translating at once, now cost two requests instead of one; with one tab and
+  one frame, batching is unchanged.
+
+No per-page context block is sent. A hostname or page-title hint was considered
+and left out deliberately: it is a guess rather than evidence, and it buys least
+on hosted-app surfaces where every document shares one hostname. Adding one later
+means extending `translateOpenAI` to take a hint, and the cache-key and
+queue-scope work above is already what such a feature would build on.
+
+Changing this instruction retires every cached translation, on every provider
+rather than just this one — see [cache.md](cache.md#prompt-revision).
+
 ## Options page layout
 
 The page is split into two sections behind the switcher under the Translaneur wordmark:

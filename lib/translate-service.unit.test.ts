@@ -335,6 +335,65 @@ describe('translate-service', () => {
     expect(translator).toHaveBeenCalledTimes(1)
   })
 
+  // The system prompt tells the model a batch is one document in reading
+  // order. That claim is only true if two documents never share a request.
+  it('keeps texts from different scopes out of the same batch', async () => {
+    const h = createHarness({ batchWindowMs: 50 })
+
+    const p1 = h.service.translate('a', 'en', { scope: '1:0' })
+    const p2 = h.service.translate('b', 'en', { scope: '2:0' })
+
+    await vi.advanceTimersByTimeAsync(50)
+
+    await expect(p1).resolves.toBe('[a]')
+    await expect(p2).resolves.toBe('[b]')
+    expect(h.translator).toHaveBeenCalledTimes(2)
+    expect(h.translator).toHaveBeenCalledWith(['a'], 'en')
+    expect(h.translator).toHaveBeenCalledWith(['b'], 'en')
+  })
+
+  it('still batches normally within one scope', async () => {
+    const h = createHarness({ batchWindowMs: 50 })
+
+    const p1 = h.service.translate('a', 'en', { scope: '1:0' })
+    const p2 = h.service.translate('b', 'en', { scope: '1:0' })
+
+    await vi.advanceTimersByTimeAsync(50)
+
+    await expect(Promise.all([p1, p2])).resolves.toEqual(['[a]', '[b]'])
+    expect(h.translator).toHaveBeenCalledOnce()
+    expect(h.translator).toHaveBeenCalledWith(['a', 'b'], 'en')
+  })
+
+  // A frame is a document, but a string is still a string: the same sentence
+  // on two pages is one cache entry. Scope partitions the queue only.
+  it('still serves the cache across scopes', async () => {
+    const h = createHarness({ batchWindowMs: 50 })
+
+    const first = h.service.translate('hello', 'en', { scope: '1:0' })
+    await vi.advanceTimersByTimeAsync(50)
+    await first
+    expect(h.translator).toHaveBeenCalledOnce()
+
+    await expect(h.service.translate('hello', 'en', { scope: '2:0' })).resolves.toBe('[hello]')
+    expect(h.translator).toHaveBeenCalledOnce()
+  })
+
+  // The per-frame cost: same document, different frames, so two requests. The
+  // page and its ad iframe must not be taught to share terminology.
+  it('separates frames of the same tab', async () => {
+    const h = createHarness({ batchWindowMs: 50 })
+
+    const main = h.service.translate('article', 'en', { scope: '7:0' })
+    const iframe = h.service.translate('ad', 'en', { scope: '7:1' })
+
+    await vi.advanceTimersByTimeAsync(50)
+
+    await expect(main).resolves.toBe('[article]')
+    await expect(iframe).resolves.toBe('[ad]')
+    expect(h.translator).toHaveBeenCalledTimes(2)
+  })
+
   it('picks up a changed maxBatchSize without recreating the service', async () => {
     // The background memoises one service per provider, so limits captured at
     // construction would ignore a change saved on the options page. The batch

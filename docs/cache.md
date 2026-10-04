@@ -9,11 +9,14 @@ Maintainer-facing. For what the user sees, see the Features section of
 ## The key
 
 ```
-`${targetLang}:${blockSource}`
+`${PROMPT_REVISION}:${targetLang}:${blockSource}`
 ```
 
-Two parts, and only two.
+Three parts.
 
+- **`PROMPT_REVISION`** — a constant in `lib/cache.ts`, currently `1`. Retires
+  every entry written under an earlier prompt. See
+  [Prompt revision](#prompt-revision).
 - **`targetLang`** — the only settings-derived input. Switching the target
   language is a cache miss, by design.
 - **`blockSource`** — the block's text-node runs, joined and prefixed with run
@@ -53,10 +56,10 @@ would reflow the page.
 
 ## Deliberately not in the key
 
-The provider, the glossary, the system prompt, and the OpenAI request
-parameters are **not** part of the key. Changing any of them does not invalidate
-anything: a page translated before the change keeps serving the cached
-translation, for up to 30 days.
+The provider, the glossary, the user's edited system prompt, and the OpenAI
+request parameters are **not** part of the key. Changing any of them does not
+invalidate anything: a page translated before the change keeps serving the
+cached translation, for up to 30 days.
 
 This is a choice, not an oversight. Switching provider or editing a glossary is
 rare, while invalidating on a settings write would silently re-bill pages the
@@ -64,6 +67,38 @@ user has already translated and looked at. The cost is that a term the user
 just corrected does not take effect on a page already in the cache. That trade
 is only tolerable because there is an explicit way to re-translate a page — see
 [below](#re-translating).
+
+A change to the *shipped* prompt is the one exception, and it goes through
+`PROMPT_REVISION` rather than through the settings path above.
+
+## Prompt revision
+
+A stored translation records what the provider said under a *particular* system
+prompt. Once that prompt changes, the entry stops being representative: a block
+translated before the batch-coherence instruction existed
+(see [openai-settings.md](openai-settings.md)) was translated without its
+neighbours, and serving it back would make the new instruction look like it
+changes nothing.
+
+Bumping `PROMPT_REVISION` retires every older entry in one step — no migration,
+no delete — and the orphaned rows age out on the existing
+[limits](#limits) schedule. The cost is one re-translation of pages the user has
+already read, paid once, on the upgrade where a prompt actually changed.
+
+That cost is **not** confined to the provider whose prompt changed. One cache
+serves all four, so an OpenAI-only edit re-bills a Google, Microsoft or Imp
+Credits user whose prompt is byte-for-byte unchanged. Scoping the revision per
+provider would mean putting the provider in the key — the trade
+[above](#deliberately-not-in-the-key) rejects, since switching provider would
+then re-bill instead of reusing. One global revision is the cheaper mistake,
+because it costs once and only on a release that actually changed a prompt.
+
+It is deliberately **not** a hash of the rendered prompt. That would re-bill a
+page every time the user touched a setting, which is the trade
+[above](#deliberately-not-in-the-key) exists to avoid.
+
+Bump it when a change to `prompt.md`, `renderSystemPrompt`, or the request shape
+would change how a block ought to come back.
 
 ## Re-translating
 
@@ -144,3 +179,7 @@ the reported symptom, a marked re-translation of the same text.
 re-bill every block and land the fresh answer, must leave that answer in the
 cache for the next normal pass, and must *not* reach a block that appears after
 it. Checked the same way — with the read no longer skipped, all three fail.
+
+`lib/cache.test.ts` pins the revision directly: an entry written in the
+pre-revision `${lang}:${text}` shape is unreachable, so a shipped prompt change
+cannot be masked by a stale hit.

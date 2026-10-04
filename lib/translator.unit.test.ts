@@ -163,6 +163,59 @@ describe('OpenAI response parsing', () => {
   })
 })
 
+describe('OpenAI batch coherence instruction', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.restoreAllMocks()
+  })
+
+  // The whole point of the instruction: a short block gets disambiguated by
+  // the blocks around it instead of guessed at in isolation.
+  it('tells the model the blocks are one document in reading order', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockResolvedValue(
+      mockOpenAIResponse('<t id="0">非目标</t>\n<t id="1">世界</t>'),
+    )
+
+    const { translate } = await import('./translator')
+    await translate(['Non-goal', 'World'], 'zh', openaiSettings)
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const system = body.messages[0].content
+    expect(system).toContain('consecutive segments of a single document')
+    expect(system).toContain('disambiguate polysemous words using the surrounding blocks')
+    // The pre-existing format contract has to survive alongside it.
+    expect(system).toContain('Keep the XML tags intact')
+  })
+
+  it('omits it for a single text, which has no neighbours to be coherent with', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockResolvedValue(mockOpenAIResponse('你好世界'))
+
+    const { translate } = await import('./translator')
+    await translate(['Hello world'], 'zh', openaiSettings)
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.messages[0].content).not.toContain('consecutive segments')
+  })
+
+  it('leaves the user message wrapping untouched', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockResolvedValue(
+      mockOpenAIResponse('<t id="0">非目标</t>\n<t id="1">世界</t>'),
+    )
+
+    const { translate } = await import('./translator')
+    await translate(['Non-goal', 'World'], 'zh', openaiSettings)
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.messages[1].content).toBe('<t id="0">Non-goal</t>\n<t id="1">World</t>')
+  })
+})
+
 describe('OpenAI custom request body params', () => {
   beforeEach(() => {
     vi.resetModules()

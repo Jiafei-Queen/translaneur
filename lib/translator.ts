@@ -317,6 +317,16 @@ export function chatCompletionsUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '') + '/chat/completions'
 }
 
+// The multi-text contract in two halves: format (how blocks arrive and must go
+// back) and meaning. The blocks are consecutive segments of one document in
+// reading order, so a short block can be disambiguated from its neighbours
+// instead of guessed at in isolation — the dominant failure mode once a page is
+// cut into DOM blocks. That claim only holds because the batch queue is scoped
+// per frame; see the scope key in lib/translate-service.ts.
+const MULTI_TEXT_INSTRUCTION =
+  'The input contains multiple texts wrapped in <t id="N"> tags. Return translations in the same format with matching ids. Keep the XML tags intact.\n' +
+  'The blocks are consecutive segments of a single document, in reading order. Translate them as one coherent whole: keep terminology consistent across blocks, and disambiguate polysemous words using the surrounding blocks.'
+
 async function translateOpenAI(
   texts: string[],
   targetLang: string,
@@ -339,9 +349,7 @@ async function translateOpenAI(
   const userContent = single
     ? texts[0]
     : texts.map((t, i) => `<t id="${i}">${t}</t>`).join('\n')
-  const sysContent = single
-    ? prompt
-    : prompt + '\nThe input contains multiple texts wrapped in <t id="N"> tags. Return translations in the same format with matching ids. Keep the XML tags intact.'
+  const sysContent = single ? prompt : `${prompt}\n${MULTI_TEXT_INSTRUCTION}`
 
   const req: OpenAIRequest = {
     endpoint: chatCompletionsUrl(baseUrl),

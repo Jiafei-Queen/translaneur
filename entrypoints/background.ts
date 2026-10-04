@@ -338,15 +338,22 @@ export default defineBackground(() => {
     return service
   }
 
-  messager.onMessage('translate', async ({ data }) => {
+  messager.onMessage('translate', async ({ data, sender }) => {
     const t = debugTime(`bg:translate(lang=${data.targetLang}, text="${data.text.slice(0, 40)}")`)
     const settings = await getSettings()
     t('getSettings done')
-    const result = await getService(settings.provider).translate(
-      data.text,
-      data.targetLang,
-      { force: data.force },
-    )
+    // A frame is a document: the page is the main frame, every iframe its own.
+    // Scoping the queue that way keeps the "consecutive segments of one
+    // document" instruction in lib/translator.ts true — otherwise two tabs, or
+    // a page and an ad iframe, share a batch and the model is told a lie. One
+    // tab and one frame, the common case, is unchanged. A sender with no tab is
+    // an extension page and gets the unscoped default.
+    const scope =
+      sender.tab?.id !== undefined ? `${sender.tab.id}:${sender.frameId ?? 0}` : undefined
+    const result = await getService(settings.provider).translate(data.text, data.targetLang, {
+      force: data.force,
+      scope,
+    })
     t('translate done')
     return result
   })

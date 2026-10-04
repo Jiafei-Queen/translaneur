@@ -32,8 +32,22 @@ function getDB() {
   return dbPromise
 }
 
+/**
+ * Prompt revision, part of every cache key.
+ *
+ * A stored translation records what the provider said under a *particular*
+ * system prompt. Once that changes, older entries stop being representative —
+ * reusing one would make a new instruction look like it does nothing. Bumping
+ * this retires them in one step: no migration, no delete, and the orphaned rows
+ * age out on the existing MAX_AGE/MAX_ENTENTS schedule.
+ *
+ * Bump it when a change to `prompt.md`, `renderSystemPrompt`, or the request
+ * shape would change how a block ought to come back.
+ */
+const PROMPT_REVISION = 1
+
 function cacheKey(text: string, targetLang: string): string {
-  return `${targetLang}:${text}`
+  return `${PROMPT_REVISION}:${targetLang}:${text}`
 }
 
 export async function getCached(

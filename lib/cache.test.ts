@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { openDB } from 'idb'
 import { getCached, setCached, evictOldEntries, clearCache } from './cache'
 
 describe('cache', () => {
@@ -54,5 +55,21 @@ describe('cache', () => {
     await evictOldEntries()
     expect(await getCached('a', 'zh')).toBe('甲')
     expect(await getCached('b', 'zh')).toBe('乙')
+  })
+
+  // A pre-revision entry was keyed `${lang}:${text}`. It must be unreadable
+  // now: reusing it would hand back a translation produced under the old
+  // prompt and make the new one look like it changed nothing. The DB name is
+  // spelled out rather than imported because DB_NAME is module-private.
+  it('should not read entries written under an older prompt revision', async () => {
+    const db = await openDB('imp-translate', 1)
+    await db.put('translations', {
+      key: 'zh:hello',
+      text: '旧提示词下的译文',
+      ts: Date.now(),
+    })
+    db.close()
+
+    expect(await getCached('hello', 'zh')).toBeUndefined()
   })
 })

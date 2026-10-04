@@ -20,10 +20,15 @@ export interface TranslateService {
   // overwrites the entry. The write is deliberately kept: a forced pass is a
   // refresh, not a one-off, and the next normal pass should be a hit rather
   // than paying for the same text twice.
+  //
+  // `scope` names the document a text belongs to — one frame of one tab. It
+  // partitions the queue, never the cache: a text is the same text wherever it
+  // appears. What must not happen is two documents sharing a request, because
+  // the system prompt tells the model a batch is one document in reading order.
   translate: (
     text: string,
     lang: string,
-    opts?: { force?: boolean },
+    opts?: { force?: boolean; scope?: string },
   ) => Promise<string>
 }
 
@@ -53,11 +58,21 @@ function svcDebugTime(label: string): (msg: string) => void {
   return log
 }
 
+// Callers with no document to name (an extension page, a test) share one queue,
+// so the pre-scope behaviour is the default rather than a special case.
+const DEFAULT_SCOPE = 'default'
+
+// Language codes are BCP-47 and contain no `@`, so this cannot collide.
+function queueKey(lang: string, scope: string): string {
+  return `${lang}@${scope}`
+}
+
 export function createTranslateService(config: TranslateServiceConfig): TranslateService {
   const queues = new Map<string, BatchQueue>()
 
-  async function flush(lang: string) {
-    const q = queues.get(lang)
+  async function flush(lang: string, scope: string) {
+    const key = queueKey(lang, scope)
+    const q = queues.get(key)
     if (!q || q.pending.length === 0) return
     if (q.timer) {
       clearTimeout(q.timer)
@@ -108,27 +123,28 @@ export function createTranslateService(config: TranslateServiceConfig): Translat
     }
   }
 
-  function enqueue(text: string, lang: string): Promise<string> {
+  function enqueue(text: string, lang: string, scope: string): Promise<string> {
     const { batchWindowMs, maxBatchSize, maxBatchChars } = config.getLimits()
+    const key = queueKey(lang, scope)
     return new Promise<string>((resolve, reject) => {
-      let q = queues.get(lang)
+      let q = queues.get(key)
       if (!q) {
         q = { pending: [], pendingChars: 0, timer: null }
-        queues.set(lang, q)
+        queues.set(key, q)
       }
       if (
         maxBatchChars !== undefined &&
         q.pending.length > 0 &&
         q.pendingChars + text.length > maxBatchChars
       ) {
-        flush(lang)
+        flush(lang, scope)
       }
       q.pending.push({ text, resolve, reject })
       q.pendingChars += text.length
       if (q.pending.length >= maxBatchSize) {
-        flush(lang)
+        flush(lang, scope)
       } else if (!q.timer) {
-        q.timer = setTimeout(() => flush(lang), batchWindowMs)
+        q.timer = setTimeout(() => flush(lang, scope), batchWindowMs)
       }
     })
   }
@@ -139,7 +155,7 @@ export function createTranslateService(config: TranslateServiceConfig): Translat
         const cached = await config.getCached(text, lang)
         if (cached !== undefined) return cached
       }
-      return enqueue(text, lang)
+      return enqueue(text, lang, opts?.scope ?? DEFAULT_SCOPE)
     },
   }
 }
