@@ -51,7 +51,7 @@ Copyright (C) 2026 rxliuli (original Imp Translate). Full license text in [LICEN
 - Smart DOM walker: only translates visible content, handles SPAs, lazy-loaded content, and dynamic text changes
 - Translations are cached per text and language, so a second pass over the same page costs nothing; "Re-translate" in the popup (↻ in the mobile bar) forces a fresh pass on demand — see [docs/cache.md](docs/cache.md)
 - Site-specific rules for skipping or targeting content areas
-- Configurable toggle shortcut, `Alt+T` by default, recordable and disable-able from the options page — see [docs/hotkey.md](docs/hotkey.md)
+- Configurable shortcuts from the options page: `Alt+T` toggles translation, `Alt+R` re-translates the page from scratch (ignoring the cache) — see [docs/hotkey.md](docs/hotkey.md)
 - Shadow DOM isolation for injected UI
 
 ## Development

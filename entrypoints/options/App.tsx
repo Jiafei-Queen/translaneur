@@ -9,7 +9,12 @@ import {
 import { chatCompletionsUrl, translate } from '@/lib/translator'
 import { messager } from '@/lib/message'
 import { IMP_CONNECT_URL } from '@/lib/imp'
-import { formatHotkey, hotkeyFromEvent } from '@/lib/hotkey'
+import {
+  RETRANSLATE_COMMAND,
+  TOGGLE_COMMAND,
+  hotkeyFromEvent,
+} from '@/lib/hotkey'
+import { HotkeyField, type HotkeyCapability } from './HotkeyField'
 import { browser } from 'wxt/browser'
 import {
   parseExtraBodyParams,
@@ -82,6 +87,10 @@ const DISPLAY_OPTIONS: readonly SegmentedOption<RenderMode>[] = [
   { value: 'translation-only', label: 'Translation only' },
 ]
 
+// Every command the shortcuts section records. The binding reads run over it,
+// so a field added to the section is wired here too.
+const HOTKEY_COMMANDS = [TOGGLE_COMMAND, RETRANSLATE_COMMAND]
+
 type SettingsSection = 'general' | 'provider'
 
 const SECTION_OPTIONS: readonly SegmentedOption<SettingsSection>[] = [
@@ -100,22 +109,22 @@ export function App() {
     msg: string
   } | null>(null)
   const [refreshingRules, setRefreshingRules] = useState(false)
-  const [recording, setRecording] = useState(false)
+  // The command being recorded, or null. A command name rather than a boolean
+  // because there are two recorders and only one may capture keys at a time.
+  const [recording, setRecording] = useState<string | null>(null)
   const [recordingHint, setRecordingHint] = useState<string | null>(null)
-  const [hotkeyState, setHotkeyState] = useState<{
-    active: string
-    canApply: boolean
-  } | null>(null)
+  const [hotkeyStates, setHotkeyStates] = useState<
+    Record<string, { active: string; canApply: boolean }>
+  >({})
   // Tri-state on purpose. A plain boolean starting at `false` would paint an
   // enabled recorder until getHotkeyState answers, and a click landing in
   // that window starts recording on a browser that cannot bind anything —
   // leaving a disabled button stuck on "Press keys…". Unknown stays disabled.
   // 'error' is separate from 'read-only' so the note can admit the query
   // failed instead of blaming Chrome for it.
-  const [hotkeyCapability, setHotkeyCapability] = useState<
-    'unknown' | 'apply' | 'read-only' | 'error'
-  >('unknown')
-  const hotkeyReadOnly = hotkeyCapability === 'read-only'
+  const [hotkeyCapability, setHotkeyCapability] = useState<HotkeyCapability>(
+    'unknown',
+  )
   const [refreshResult, setRefreshResult] = useState<{
     ok: boolean
     msg: string
@@ -150,11 +159,17 @@ export function App() {
   // how a Chrome user changes it. canApply also decides whether this page may
   // record a shortcut at all.
   function refreshHotkeyState() {
-    messager
-      .sendMessage('getHotkeyState')
-      .then((state) => {
-        setHotkeyState(state)
-        setHotkeyCapability(state.canApply ? 'apply' : 'read-only')
+    Promise.all(
+      HOTKEY_COMMANDS.map(async (command) => {
+        const state = await messager.sendMessage('getHotkeyState', { command })
+        return [command, state] as const
+      }),
+    )
+      .then((entries) => {
+        setHotkeyStates(Object.fromEntries(entries))
+        // canApply is a property of the browser, not of a command, so any
+        // answer decides for both fields.
+        setHotkeyCapability(entries[0][1].canApply ? 'apply' : 'read-only')
       })
       // Stay disabled on failure: a shortcut we could not verify is not one
       // we should offer to change, and the note below says which it was.
@@ -211,34 +226,39 @@ export function App() {
   // browser allows. Reachable only on canApply browsers — a canApply:false
   // browser renders this control read-only, so no caller here ever observes
   // a failed apply.
-  function commitHotkey(hotkey: string) {
-    update({ hotkey })
+  function commitHotkey(command: string, hotkey: string) {
+    update(
+      command === TOGGLE_COMMAND
+        ? { toggleHotkey: hotkey }
+        : { retranslateHotkey: hotkey },
+    )
     void (async () => {
       try {
-        await messager.sendMessage('setHotkey', { hotkey })
-        setHotkeyState(await messager.sendMessage('getHotkeyState'))
+        await messager.sendMessage('setHotkey', { command, hotkey })
+        const state = await messager.sendMessage('getHotkeyState', { command })
+        setHotkeyStates((prev) => ({ ...prev, [command]: state }))
       } catch {}
     })()
   }
 
   // Recording listens on window rather than on the button, so it survives
-  // focus moving elsewhere mid-recording. The component re-runs this effect
-  // whenever the stored value changes, so commitHotkey can read the latest
-  // settings rather than capturing a stale closure.
+  // focus moving elsewhere mid-recording. The effect re-runs whenever a stored
+  // shortcut changes, so commitHotkey works from the latest settings rather
+  // than capturing a stale closure.
   useEffect(() => {
     if (!recording) return
     const onKeyDown = (e: KeyboardEvent) => {
       e.preventDefault()
       e.stopPropagation()
       if (e.key === 'Escape') {
-        setRecording(false)
+        setRecording(null)
         setRecordingHint(null)
         return
       }
       if (e.key === 'Backspace' || e.key === 'Delete') {
-        setRecording(false)
+        setRecording(null)
         setRecordingHint(null)
-        commitHotkey('')
+        commitHotkey(recording, '')
         return
       }
       const next = hotkeyFromEvent(e)
@@ -248,13 +268,13 @@ export function App() {
         setRecordingHint('Use Alt or Ctrl plus one key. Ctrl+Alt is not allowed.')
         return
       }
-      setRecording(false)
+      setRecording(null)
       setRecordingHint(null)
-      commitHotkey(next)
+      commitHotkey(recording, next)
     }
     window.addEventListener('keydown', onKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
-  }, [recording, settings?.hotkey])
+  }, [recording, settings?.toggleHotkey, settings?.retranslateHotkey])
 
   function connectImp() {
     browser.tabs.create({ url: IMP_CONNECT_URL })
@@ -272,7 +292,10 @@ export function App() {
   const glossaryStatus = parseGlossary(settings.glossary)
 
   function update(patch: Partial<Settings>) {
-    setSettings({ ...settings!, ...patch })
+    // Functional: a recorder's window-level keydown handler holds the closure
+    // from the render that started recording, so spreading the render-time
+    // `settings` there would rebase a stale object over anything changed since.
+    setSettings((prev) => ({ ...prev!, ...patch }))
     saveSettings(patch)
   }
 
@@ -361,108 +384,87 @@ export function App() {
 
           <section className="space-y-4">
             <div>
-              <h2 className="font-semibold">Toggle Shortcut</h2>
+              <h2 className="font-semibold">Shortcuts</h2>
               <p className="text-sm text-muted-foreground">
-                Keyboard shortcut that translates or restores the current page.
+                Keyboard shortcuts for the current page.
               </p>
             </div>
 
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2">
-                <Button
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Toggle translation</Label>
+                <HotkeyField
                   id="hotkey"
-                  variant="outline"
-                  size="sm"
-                  className="font-mono"
-                  aria-label="Toggle shortcut"
-                  disabled={hotkeyCapability !== 'apply'}
-                  // A disabled button swallows hover, so the reason it is
-                  // disabled has to live in the title as well as the note below.
-                  title={
-                    hotkeyReadOnly
-                      ? 'Chrome does not let extensions assign shortcuts'
-                      : undefined
-                  }
-                  onClick={() => {
+                  label="Toggle shortcut"
+                  command={TOGGLE_COMMAND}
+                  value={settings.toggleHotkey}
+                  active={hotkeyStates[TOGGLE_COMMAND]?.active ?? ''}
+                  capability={hotkeyCapability}
+                  recording={recording === TOGGLE_COMMAND}
+                  hint={recordingHint}
+                  onRecord={() => {
                     setRecordingHint(null)
-                    setRecording(true)
+                    setRecording(TOGGLE_COMMAND)
+                  }}
+                  onClear={() => commitHotkey(TOGGLE_COMMAND, '')}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Re-translate from scratch</Label>
+                <HotkeyField
+                  id="retranslate-hotkey"
+                  label="Re-translate shortcut"
+                  command={RETRANSLATE_COMMAND}
+                  value={settings.retranslateHotkey}
+                  active={hotkeyStates[RETRANSLATE_COMMAND]?.active ?? ''}
+                  capability={hotkeyCapability}
+                  recording={recording === RETRANSLATE_COMMAND}
+                  hint={recordingHint}
+                  onRecord={() => {
+                    setRecordingHint(null)
+                    setRecording(RETRANSLATE_COMMAND)
+                  }}
+                  onClear={() => commitHotkey(RETRANSLATE_COMMAND, '')}
+                />
+              </div>
+            </div>
+
+            {hotkeyCapability === 'apply' && (
+              <p className="text-xs text-muted-foreground">
+                Click a field, then press a combination. Backspace clears it,
+                Escape cancels.
+              </p>
+            )}
+            {hotkeyCapability === 'error' && (
+              <p className="text-xs text-muted-foreground">
+                Could not read the browser's shortcut settings, so the fields
+                above are read-only here. Reload to try again.
+              </p>
+            )}
+            {hotkeyCapability === 'read-only' && (
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">
+                  Chrome does not let extensions assign shortcuts. The fields
+                  above are read-only here, so finish each binding in the
+                  browser's shortcut settings.
+                </p>
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0"
+                  onClick={() => {
+                    // Chrome blocks navigation to some chrome:// URLs;
+                    // failing quietly beats an unhandled rejection in the
+                    // console.
+                    void browser.tabs
+                      .create({ url: 'chrome://extensions/shortcuts' })
+                      .catch(() => {})
                   }}
                 >
-                  {recording
-                    ? 'Press keys…'
-                    : hotkeyReadOnly
-                      ? // What the browser will really fire, and nothing else.
-                        // Falling back to settings.hotkey re-creates the "saved
-                        // but never applied" lie: getSettings() merges
-                        // DEFAULT_SETTINGS.hotkey, so a stored value can exist
-                        // with no binding behind it.
-                        hotkeyState?.active
-                        ? formatHotkey(hotkeyState.active)
-                        : 'Not set'
-                      : settings.hotkey
-                        ? formatHotkey(settings.hotkey)
-                        : 'Not set'}
+                  Open browser shortcut settings
                 </Button>
-                {settings.hotkey !== '' && !recording && !hotkeyReadOnly && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => commitHotkey('')}
-                  >
-                    Clear
-                  </Button>
-                )}
               </div>
-              {hotkeyCapability === 'apply' && (
-                <p className="text-xs text-muted-foreground">
-                  Click the button, then press a combination. Backspace clears
-                  it, Escape cancels.
-                </p>
-              )}
-              {recording && recordingHint && (
-                <p className="text-xs text-destructive">{recordingHint}</p>
-              )}
-              {hotkeyCapability === 'apply' &&
-                (hotkeyState?.active ? (
-                  <p className="text-xs text-muted-foreground">
-                    Currently active: {formatHotkey(hotkeyState.active)}
-                  </p>
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    Not active in the browser.
-                  </p>
-                ))}
-              {hotkeyCapability === 'error' && (
-                <p className="text-xs text-muted-foreground">
-                  Could not read the browser's shortcut settings, so the field
-                  above is read-only here. Reload to try again.
-                </p>
-              )}
-              {hotkeyReadOnly && (
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">
-                    Chrome does not let extensions assign shortcuts. The field
-                    above is read-only here, so finish the binding in the
-                    browser's shortcut settings.
-                  </p>
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="h-auto p-0"
-                    onClick={() => {
-                      // Chrome blocks navigation to some chrome:// URLs;
-                      // failing quietly beats an unhandled rejection in the
-                      // console.
-                      void browser.tabs
-                        .create({ url: 'chrome://extensions/shortcuts' })
-                        .catch(() => {})
-                    }}
-                  >
-                    Open browser shortcut settings
-                  </Button>
-                </div>
-              )}
-            </div>
+            )}
           </section>
 
           <section className="space-y-4">

@@ -59,33 +59,90 @@ export async function getServiceWorker(context: BrowserContext) {
   return sw
 }
 
+// The getAll() interception both stubs below need. Self-contained so Playwright
+// can serialize it into the service worker.
+const installShortcutOverrides = () => {
+  const g = globalThis as unknown as {
+    __getAllOrig?: typeof chrome.commands.getAll
+    __shortcutOverrides?: Record<string, string>
+  }
+  if (g.__getAllOrig) return
+  g.__getAllOrig = chrome.commands.getAll.bind(chrome.commands)
+  chrome.commands.getAll = async () => {
+    const all = await g.__getAllOrig!()
+    return all.map((c) =>
+      g.__shortcutOverrides?.[c.name] !== undefined
+        ? { ...c, shortcut: g.__shortcutOverrides[c.name] }
+        : c,
+    )
+  }
+}
+
 // Chrome has no commands.update(), so a test cannot change the binding the way
 // a user does. Override getAll() in the service worker instead: the background
 // calls it on every getHotkeyState, so the options page reads whatever this
-// returns. Call again to change or clear the override.
+// returns. Call again to change or clear the override for the same command.
 export async function stubBrowserShortcut(
   context: BrowserContext,
   shortcut: string,
+  command = 'toggle-translate',
 ) {
   const sw = await getServiceWorker(context)
-  await sw.evaluate((shortcut) => {
-    const g = globalThis as {
-      __getAllOrig?: typeof chrome.commands.getAll
-      __shortcutOverride?: string
+  await sw.evaluate(installShortcutOverrides)
+  await sw.evaluate(
+    ({ shortcut, command }) => {
+      const g = globalThis as unknown as {
+        __shortcutOverrides?: Record<string, string>
+      }
+      g.__shortcutOverrides = { ...g.__shortcutOverrides, [command]: shortcut }
+    },
+    { shortcut, command },
+  )
+}
+
+// Makes the background believe commands.update() exists, which on a real Chrome
+// it does not. Recording is refused there by design, so this is the only way to
+// drive the recorder — and the calls it captures prove which command name and
+// shortcut reached the browser API. A recorded binding also shows up in
+// getAll(), so the page's "currently active" line follows it like it would on
+// Firefox. Returns a reader for the captured calls.
+export async function stubBrowserUpdate(context: BrowserContext) {
+  const sw = await getServiceWorker(context)
+  await sw.evaluate(installShortcutOverrides)
+  await sw.evaluate(() => {
+    const g = globalThis as unknown as {
+      __hotkeyUpdates?: { name: string; shortcut: string }[]
+      __shortcutOverrides?: Record<string, string>
     }
-    if (!g.__getAllOrig) {
-      g.__getAllOrig = chrome.commands.getAll.bind(chrome.commands)
-      chrome.commands.getAll = async () => {
-        const all = await g.__getAllOrig!()
-        return all.map((c) =>
-          c.name === 'toggle-translate'
-            ? { ...c, shortcut: g.__shortcutOverride ?? c.shortcut }
-            : c,
-        )
+    g.__hotkeyUpdates = []
+    ;(chrome.commands as { update?: unknown }).update = async (details: {
+      name: string
+      shortcut: string
+    }) => {
+      g.__hotkeyUpdates!.push(details)
+      g.__shortcutOverrides = {
+        ...g.__shortcutOverrides,
+        [details.name]: details.shortcut,
       }
     }
-    g.__shortcutOverride = shortcut
-  }, shortcut)
+  })
+  return async () =>
+    await sw.evaluate(() => {
+      const g = globalThis as unknown as {
+        __hotkeyUpdates?: { name: string; shortcut: string }[]
+      }
+      return g.__hotkeyUpdates ?? []
+    })
+}
+
+export async function getCommands(context: BrowserContext) {
+  const sw = await getServiceWorker(context)
+  return await sw.evaluate(async () =>
+    (await chrome.commands.getAll()).map((c) => ({
+      name: c.name,
+      shortcut: c.shortcut,
+    })),
+  )
 }
 
 export async function getTabId(page: Page): Promise<number> {

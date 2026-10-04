@@ -10,7 +10,12 @@ import { getEffectiveRules, setupRemoteRulesAlarm, fetchRemoteRulesIfNeeded } fr
 import { PublicPath } from 'wxt/browser'
 import { debugTime, isPdfUrl } from '@/lib/utils'
 import { IMP_ORIGIN } from '@/lib/imp'
-import { TOGGLE_COMMAND, toBrowserShortcut, toStoredShortcut } from '@/lib/hotkey'
+import {
+  RETRANSLATE_COMMAND,
+  TOGGLE_COMMAND,
+  toBrowserShortcut,
+  toStoredShortcut,
+} from '@/lib/hotkey'
 
 async function getMatchedRulesForHostname(hostname: string): Promise<SiteRule[]> {
   const effectiveRules = await getEffectiveRules()
@@ -149,6 +154,18 @@ async function toggleTranslationForActiveTab() {
   }
 }
 
+// The re-translate hotkey. Always acts rather than only refreshing a page that
+// is already translating: on such a page this is the popup's "Re-translate"
+// (a walk with the cache read skipped), and on a cold one a forced pass is
+// just the first translation. A silent no-op would make the key look broken.
+async function retranslateForActiveTab() {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
+  if (!tab?.id) return
+  if (isPdfUrl(tab.url)) return
+  const settings = await getSettings()
+  await startTranslationForTab(tab.id, settings.targetLang, true, true)
+}
+
 // Mobile has no action popup, so the toolbar icon is the only way back to the
 // in-page panel (restore / settings / language). Idle: start translation and
 // open the panel. Translating: stop (restoring the original page) — the
@@ -200,12 +217,12 @@ function commandsUpdate() {
   return (browser.commands as CommandsWithUpdate).update
 }
 
-async function applyHotkey(hotkey: string): Promise<boolean> {
+async function applyHotkey(command: string, hotkey: string): Promise<boolean> {
   const update = commandsUpdate()
   if (!update) return false
   try {
     await update.call(browser.commands, {
-      name: TOGGLE_COMMAND,
+      name: command,
       // Storage keeps "Ctrl+K"; macOS needs "MacCtrl+K" to bind Control
       // instead of Command.
       shortcut: toBrowserShortcut(hotkey),
@@ -217,9 +234,12 @@ async function applyHotkey(hotkey: string): Promise<boolean> {
   }
 }
 
-async function syncHotkeyFromSettings() {
-  const { hotkey } = await getSettings()
-  await applyHotkey(hotkey)
+async function syncHotkeysFromSettings() {
+  const { toggleHotkey, retranslateHotkey } = await getSettings()
+  // Both, and independently: a browser that rejects one command's shortcut
+  // must not leave the other unapplied on startup.
+  await applyHotkey(TOGGLE_COMMAND, toggleHotkey)
+  await applyHotkey(RETRANSLATE_COMMAND, retranslateHotkey)
 }
 
 export default defineBackground(() => {
@@ -228,11 +248,11 @@ export default defineBackground(() => {
 
   browser.runtime.onInstalled.addListener(async () => {
     await setupMobileAction()
-    await syncHotkeyFromSettings()
+    await syncHotkeysFromSettings()
   })
   browser.runtime.onStartup.addListener(async () => {
     await setupMobileAction()
-    await syncHotkeyFromSettings()
+    await syncHotkeysFromSettings()
   })
 
   browser.action.onClicked.addListener(() => openPanelForActiveTab())
@@ -244,17 +264,20 @@ export default defineBackground(() => {
   // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/commands#browser_compatibility
   if (browser.commands?.onCommand) {
     browser.commands.onCommand.addListener(async (command) => {
-      if (command !== TOGGLE_COMMAND) return
-      // Keyboard keeps the toggle — a keypress is deliberate.
-      await toggleTranslationForActiveTab()
+      if (command === TOGGLE_COMMAND) {
+        // Keyboard keeps the toggle — a keypress is deliberate.
+        await toggleTranslationForActiveTab()
+      } else if (command === RETRANSLATE_COMMAND) {
+        await retranslateForActiveTab()
+      }
     })
   }
 
   messager.onMessage('setHotkey', async ({ data }) => {
-    return { applied: await applyHotkey(data.hotkey) }
+    return { applied: await applyHotkey(data.command, data.hotkey) }
   })
 
-  messager.onMessage('getHotkeyState', async () => {
+  messager.onMessage('getHotkeyState', async ({ data }) => {
     const canApply = typeof commandsUpdate() === 'function'
     // getAll() exists wherever commands does, Chrome included, so read the
     // browser's real binding unconditionally. Gating it on canApply hid the
@@ -264,7 +287,7 @@ export default defineBackground(() => {
     // The browser reports its own dialect; show the same one the user picked
     // so the two lines below the button agree.
     const active = toStoredShortcut(
-      all.find((c) => c.name === TOGGLE_COMMAND)?.shortcut ?? '',
+      all.find((c) => c.name === data.command)?.shortcut ?? '',
     )
     return { active, canApply }
   })

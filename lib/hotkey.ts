@@ -5,9 +5,13 @@
 // extension injects nothing into a page until translation starts, so a
 // content-script hotkey could not work on a cold tab. See docs/hotkey.md.
 
+// The two manifest commands. Their names are the ones in wxt.config.ts, and
+// `commands.onCommand` reports them verbatim.
 export const TOGGLE_COMMAND = 'toggle-translate'
+export const RETRANSLATE_COMMAND = 'retranslate-page'
 
-export const DEFAULT_HOTKEY = 'Alt+T'
+export const DEFAULT_TOGGLE_HOTKEY = 'Alt+T'
+export const DEFAULT_RETRANSLATE_HOTKEY = 'Alt+R'
 
 // Grammar order is fixed by the WebExtension shortcut parser: Ctrl/Alt first,
 // then Shift, then the key. MacCtrl appears because macOS normalizes a

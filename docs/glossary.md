@@ -87,9 +87,9 @@ Translations are cached per text and language, not per glossary. Editing the
 glossary changes the request but not the cache key, so a term you just
 corrected will keep serving the cached translation of a text translated before
 the edit — including a page translated a moment ago in this session. Re-translate
-the page (the popup's "Re-translate", or ↻ in the mobile bar) to fetch it again.
-That behaviour is deliberate; the key and the reasoning behind it are in
-[cache.md](cache.md).
+the page (the popup's "Re-translate", ↻ in the mobile bar, or `Alt+R`) to fetch
+it again. That behaviour is deliberate; the key and the reasoning behind it are
+in [cache.md](cache.md).
 
 ## Code map
 

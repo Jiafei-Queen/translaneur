@@ -56,6 +56,12 @@ export default defineConfig({
           },
           description: 'Toggle page translation',
         },
+        'retranslate-page': {
+          suggested_key: {
+            default: 'Alt+R',
+          },
+          description: 'Re-translate the page',
+        },
       },
     }
     if (env.browser === 'firefox') {

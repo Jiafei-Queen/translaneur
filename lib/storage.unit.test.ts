@@ -59,23 +59,53 @@ describe('storage', () => {
     expect(settings.provider).toBe('google')
   })
 
-  it('hotkey defaults to Alt+T for new and pre-existing installs', async () => {
+  it('the toggle hotkey defaults to Alt+T for new and pre-existing installs', async () => {
     const { getSettings } = await import('./storage')
-    expect((await getSettings()).hotkey).toBe('Alt+T')
+    expect((await getSettings()).toggleHotkey).toBe('Alt+T')
 
     // A profile stored before the hotkey existed has no such key and must
     // still read back as the new default, not undefined.
     localStore.set('settings', { provider: 'google' })
-    expect((await getSettings()).hotkey).toBe('Alt+T')
+    expect((await getSettings()).toggleHotkey).toBe('Alt+T')
+  })
+
+  it('the re-translate hotkey defaults to Alt+R', async () => {
+    const { getSettings } = await import('./storage')
+    expect((await getSettings()).retranslateHotkey).toBe('Alt+R')
+
+    localStore.set('settings', { provider: 'google' })
+    expect((await getSettings()).retranslateHotkey).toBe('Alt+R')
+  })
+
+  it('migrates a stored hotkey into toggleHotkey', async () => {
+    // Pre-0.2.2 profiles have one shortcut under `hotkey`. It is the user's own
+    // binding, so the upgrade must carry it across rather than drop it back to
+    // the default — and must not leave the old key behind to be read as a
+    // second source of truth.
+    localStore.set('settings', { provider: 'google', hotkey: 'Alt+K' })
+
+    const { getSettings } = await import('./storage')
+    expect((await getSettings()).toggleHotkey).toBe('Alt+K')
+
+    const raw = localStore.get('settings') as Record<string, unknown>
+    expect(raw.hotkey).toBeUndefined()
+    expect(raw.toggleHotkey).toBe('Alt+K')
   })
 
   it('an empty hotkey means off and round-trips instead of falling back', async () => {
     const { saveSettings, getSettings } = await import('./storage')
-    await saveSettings({ hotkey: '' })
-    expect((await getSettings()).hotkey).toBe('')
+    await saveSettings({ toggleHotkey: '' })
+    expect((await getSettings()).toggleHotkey).toBe('')
 
-    await saveSettings({ hotkey: 'Alt+Shift+K' })
-    expect((await getSettings()).hotkey).toBe('Alt+Shift+K')
+    await saveSettings({ toggleHotkey: 'Alt+Shift+K' })
+    expect((await getSettings()).toggleHotkey).toBe('Alt+Shift+K')
+  })
+
+  it('the two shortcuts are stored independently', async () => {
+    const { saveSettings, getSettings } = await import('./storage')
+    await saveSettings({ retranslateHotkey: '' })
+    expect((await getSettings()).toggleHotkey).toBe('Alt+T')
+    expect((await getSettings()).retranslateHotkey).toBe('')
   })
 
   it('saving nested openai config persists correctly', async () => {

@@ -74,13 +74,19 @@ separate, deliberate action:
 - **Desktop** — "Re-translate" in the popup, shown only while the tab is
   translated.
 - **Mobile** — the ↻ button in the toast bar, likewise only while translating.
+- **Keyboard** — `Alt+R` by default, configurable in the options page; see
+  [hotkey.md](hotkey.md). Unlike the two above it also acts on a page that is
+  not translating, since on a cold page a forced pass is simply the first
+  translation.
 
-Both send `startTab { force: true }`, which reaches the content script as
-`startTranslation { force: true }`. The content script restarts its own run in
-place (a start on a translating page is otherwise a no-op) and walks again with
-`force` on each `translate` request. The service skips its cache *read* and
-still performs the *write*, so the forced response replaces the entry: the pass
-is a refresh, and every later pass is a hit again rather than paying twice.
+All three end in the content script handling `startTranslation { force: true }`:
+the popup sends `startTab { force: true }` and the hotkey calls the background's
+start directly, while the toast bar restarts its own run in place. The content
+script restarts its run rather than ignoring the start (a start on a translating
+page is otherwise a no-op) and walks again with `force` on each `translate`
+request. The service skips its cache *read* and still performs the *write*, so
+the forced response replaces the entry: the pass is a refresh, and every later
+pass is a hit again rather than paying twice.
 
 ### What a forced pass covers
 

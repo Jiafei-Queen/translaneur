@@ -1,4 +1,4 @@
-import { DEFAULT_HOTKEY } from './hotkey'
+import { DEFAULT_TOGGLE_HOTKEY, DEFAULT_RETRANSLATE_HOTKEY } from './hotkey'
 import { DEFAULT_SYSTEM_PROMPT } from './prompt'
 
 export type TranslationProvider = 'microsoft' | 'google' | 'openai' | 'imp'
@@ -43,7 +43,9 @@ export interface Settings {
   // meaning "off". This is the extension's record of intent; the browser's
   // real binding is read from browser.commands.getAll() and can differ on
   // Chrome, which refuses to let extensions assign shortcuts.
-  hotkey: string
+  toggleHotkey: string
+  // Same, for the re-translate command ('Alt+R').
+  retranslateHotkey: string
   // Source→target term pairs, one "source = target" per line, `!` comments.
   // Stored as text rather than a parsed list so the options page can hold a
   // half-typed line and keep the user's caret position; see lib/glossary.ts.
@@ -59,7 +61,8 @@ const DEFAULT_SETTINGS: Settings = {
   developerMode: false,
   debugMode: false,
   customRules: '',
-  hotkey: DEFAULT_HOTKEY,
+  toggleHotkey: DEFAULT_TOGGLE_HOTKEY,
+  retranslateHotkey: DEFAULT_RETRANSLATE_HOTKEY,
   glossary: '',
   openai: {
     apiKey: '',
@@ -88,6 +91,17 @@ function migrateLegacyEndpoint(raw: Partial<Settings>): Partial<Settings> {
   return { ...raw, openai: { ...rest, baseUrl } }
 }
 
+// Versions ≤0.2.1 stored the toggle's shortcut as `hotkey`, before the
+// re-translate command gave the setting a second member and a name that says
+// which command it belongs to. The value is the user's own binding, so it
+// moves across rather than being dropped; the old key is removed so it cannot
+// be read back as a second source of truth.
+function migrateLegacyHotkey(raw: Partial<Settings>): Partial<Settings> {
+  const { hotkey, ...rest } = raw as Partial<Settings> & { hotkey?: string }
+  if (hotkey === undefined) return raw
+  return { ...rest, toggleHotkey: rest.toggleHotkey ?? hotkey }
+}
+
 // A shallow spread would let a stored `openai` object replace the default one
 // wholesale, leaving every field it predates undefined. Nested merge is what
 // makes adding a field to OpenAIConfig safe.
@@ -100,6 +114,13 @@ function mergeWithDefaults(raw: Partial<Settings>): Settings {
 }
 
 let cachedSettings: Settings | null = null
+
+// Every upgrade step, applied in order. Each returns its input unchanged when
+// it had nothing to do, which is what lets getSettings() below skip the
+// write-back for settings that are already current.
+function migrate(raw: Partial<Settings>): Partial<Settings> {
+  return migrateLegacyHotkey(migrateLegacyEndpoint(raw))
+}
 
 /**
  * Synchronous read of the last settings seen by getSettings/saveSettings.
@@ -119,7 +140,7 @@ export async function getSettings(): Promise<Settings> {
   const stored = await browser.storage.local.get('settings')
   if (!stored.settings) return (cachedSettings = mergeWithDefaults({}))
   const raw = stored.settings as Partial<Settings>
-  const migrated = migrateLegacyEndpoint(raw)
+  const migrated = migrate(raw)
   if (migrated !== raw) await browser.storage.local.set({ settings: migrated })
   return (cachedSettings = mergeWithDefaults(migrated))
 }
@@ -128,7 +149,7 @@ export async function saveSettings(
   settings: Partial<Settings>,
 ): Promise<Settings> {
   const stored = await browser.storage.local.get('settings')
-  const raw = migrateLegacyEndpoint((stored.settings ?? {}) as Partial<Settings>)
+  const raw = migrate((stored.settings ?? {}) as Partial<Settings>)
   const merged = { ...raw, ...settings }
   await browser.storage.local.set({ settings: merged })
   return (cachedSettings = mergeWithDefaults(merged))

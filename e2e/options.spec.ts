@@ -108,12 +108,19 @@ test('options page explains that Chrome cannot assign the shortcut', async ({
     page.getByRole('button', { name: 'Open browser shortcut settings' }),
   ).toBeVisible()
   // Offering a recorder here would let the user "save" a shortcut that can
-  // never fire, which is the exact false success this guards against.
+  // never fire, which is the exact false success this guards against. Both
+  // commands are read-only, so neither may offer a recorder or a Clear.
   await expect(page.locator('#hotkey')).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Clear' })).toBeHidden()
-  // Recording instructions are meaningless on a field that cannot be edited.
+  await expect(page.locator('#retranslate-hotkey')).toBeDisabled()
   await expect(
-    page.getByText('Click the button, then press a combination.', {
+    page.locator('[data-hotkey-command="toggle-translate"]').getByRole(
+      'button',
+      { name: 'Clear' },
+    ),
+  ).toBeHidden()
+  // Recording instructions are meaningless on fields that cannot be edited.
+  await expect(
+    page.getByText('Click a field, then press a combination.', {
       exact: false,
     }),
   ).toBeHidden()
@@ -126,7 +133,7 @@ test('options page shows the browser binding, not the stored preference', async 
   context,
   extensionId,
 }) => {
-  await setSettings(context, { hotkey: 'Alt+K' })
+  await setSettings(context, { toggleHotkey: 'Alt+K' })
 
   const page = await context.newPage()
   await page.goto(`chrome-extension://${extensionId}/options.html`)
@@ -136,8 +143,8 @@ test('options page shows the browser binding, not the stored preference', async 
 })
 
 // The same lie when the user clears the binding at
-// chrome://extensions/shortcuts: getSettings() merges DEFAULT_SETTINGS.hotkey,
-// so a fallback would still show "Alt + T" with nothing bound behind it.
+// chrome://extensions/shortcuts: getSettings() merges DEFAULT_SETTINGS, so a
+// fallback would still show "Alt + T" with nothing bound behind it.
 test('options page does not claim a shortcut the browser has dropped', async ({
   context,
   extensionId,

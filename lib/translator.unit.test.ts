@@ -68,7 +68,8 @@ const openaiSettings: Settings = {
   debugMode: false,
   customRules: '',
   glossary: '',
-  hotkey: 'Alt+T',
+  toggleHotkey: 'Alt+T',
+  retranslateHotkey: 'Alt+R',
   openai: {
     apiKey: 'test-key',
     baseUrl: 'https://api.example.com/v1',
@@ -296,7 +297,8 @@ const msSettings: Settings = {
   debugMode: false,
   customRules: '',
   glossary: '',
-  hotkey: 'Alt+T',
+  toggleHotkey: 'Alt+T',
+  retranslateHotkey: 'Alt+R',
   openai: {
     apiKey: '',
     baseUrl: '',
@@ -604,7 +606,8 @@ const impSettings: Settings = {
   debugMode: false,
   customRules: '',
   glossary: '',
-  hotkey: 'Alt+T',
+  toggleHotkey: 'Alt+T',
+  retranslateHotkey: 'Alt+R',
   openai: {
     apiKey: '',
     baseUrl: '',
