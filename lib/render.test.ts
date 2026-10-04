@@ -8,7 +8,7 @@ import {
   showToastBar,
   type ToastBarOptions,
 } from './render'
-import { clearTranslations, extractBlocks, getTranslatableRuns, markTranslated, type TranslatableBlock } from './dom'
+import { buildBlockSource, clearTranslations, extractBlocks, getTranslatableRuns, markTranslated, type TranslatableBlock } from './dom'
 import { buildMarkedSource, stripMarkers } from './align'
 
 describe('render', () => {
@@ -698,11 +698,11 @@ describe('translation-only rendering', () => {
     expect(p.getAttribute('data-imp-text')).toBe(blocks[0]!.text)
   })
 
-  it('aligns by marker id when the provider returns markup markers', () => {
+  it('writes a wrapped markup response into the runs', () => {
     const { p, blocks } = runsFixture()
     replaceWithTranslation(
       blocks,
-      ['<x id="1"></x>点击<x id="2"></x>这里<x id="3"></x>立刻'],
+      ['<i id="1">点击</i><i id="2">这里</i><i id="3">立刻</i>'],
       { renderMode: 'translation-only' },
     )
     const a = p.querySelector('a')!
@@ -711,34 +711,68 @@ describe('translation-only rendering', () => {
     expect(p.textContent).toBe('点击这里立刻')
   })
 
-  it('keeps the source when the runs come back in target word order', () => {
-    // Ids in 1,5,6,2,3,4,7 — every mark present, so this reports a clean
-    // alignment, and the pieces are id-correct. But the runs are fixed slots in
-    // source order, so writing them yields "Translaneurは、拡張機能です。外国語".
-    // Untranslated beats scrambled, and the token stays as seeded so recheck
-    // sees an unchanged block.
+  it('writes reordered runs in output order, drifting the inline boundary', () => {
+    // The provider put run 3 ahead of run 2, which is the target language's word
+    // order and therefore the correct sentence — so the pieces are written in
+    // that order instead of refused. The runs are fixed slots, so the link now
+    // carries its neighbour's words; its href is untouched, and this drift is
+    // the accepted cost of output-order write-back.
     const { p, blocks } = runsFixture()
-    p.setAttribute('data-imp-text', blocks[0]!.text)
     replaceWithTranslation(
       blocks,
-      ['⟦1⟧Translaneurは、⟦5⟧拡張機能⟦6⟧です。⟦2⟧外国語⟦3⟧のページ⟦4⟧を読むための'],
+      ['<i id="1">点击</i><i id="3">立刻</i><i id="2">这里</i>'],
       { renderMode: 'translation-only' },
     )
-    expect(p.textContent).toBe('Click here now')
-    expect(p.querySelector('a')!.getAttribute('href')).toBe('/x')
-    expect(p.getAttribute('data-imp-text')).toBe(blocks[0]!.text)
+    const a = p.querySelector('a')!
+    expect(a.textContent).toBe('立刻')
+    expect(a.getAttribute('href')).toBe('/x')
+    expect(p.textContent).toBe('点击立刻这里')
+    expect(p.querySelector('.imp-translate-loading')).toBeNull()
+    // Token matches what the pipeline recomputes from the mutated DOM, so
+    // recheck does not see a stale block.
+    expect(p.getAttribute('data-imp-text')).toBe(buildBlockSource(p))
   })
 
-  it('keeps the source when a comment-separated block comes back reordered', () => {
-    // No descendant element, so the alignment-failure guard above does not
-    // apply — but the slots are still fixed and the word order still moved.
+  it('leaves a passthrough run untouched on the page', () => {
+    // The whitespace between the two <b>s was sent untagged — it has no words of
+    // its own — so no piece is written into it, and the space it supplies is
+    // what separates the two runs on the page even though the provider's
+    // response dropped it.
+    document.body.innerHTML = '<p>这是 <b>第一</b> <b>部分</b></p>'
+    const p = document.querySelector('p') as HTMLElement
+    const blocks = [
+      { element: p, text: buildMarkedSource(['这是 ', '第一', ' ', '部分']) },
+    ] as TranslatableBlock[]
+
+    injectLoading(blocks)
+    replaceWithTranslation(
+      blocks,
+      ['<i id="1">This is </i><i id="2">the first</i><i id="4">part</i>'],
+      { renderMode: 'translation-only' },
+    )
+
+    expect(Array.from(p.querySelectorAll('b')).map((b) => b.textContent)).toEqual([
+      'the first',
+      'part',
+    ])
+    expect(
+      Array.from(p.childNodes)
+        .filter((n): n is Text => n.nodeType === Node.TEXT_NODE)
+        .map((n) => n.data),
+    ).toEqual(['This is ', ' '])
+    expect(p.textContent).toBe('This is the first part')
+  })
+
+  it('writes a comment-separated block in provider output order', () => {
+    // No descendant element, so the alignment guard does not apply either way —
+    // the two runs are separate text nodes and the pieces land in the order the
+    // provider wrote them.
     document.body.innerHTML = '<p>abc<!-- split -->def</p>'
     const p = document.querySelector('p') as HTMLElement
-    const blocks = [{ element: p, text: buildMarkedSource(['abc', 'def'])}] as TranslatableBlock[]
-    p.setAttribute('data-imp-text', blocks[0]!.text)
+    const blocks = [{ element: p, text: buildMarkedSource(['abc', 'def']) }] as TranslatableBlock[]
     replaceWithTranslation(blocks, ['⟦2⟧乙⟦1⟧甲'], { renderMode: 'translation-only' })
-    expect(p.textContent).toBe('abcdef')
-    expect(p.getAttribute('data-imp-text')).toBe(blocks[0]!.text)
+    expect(p.textContent).toBe('乙甲')
+    expect(p.getAttribute('data-imp-text')).toBe(buildBlockSource(p))
   })
 
   it('skips stale blocks whose DOM changed under the request', () => {
@@ -809,20 +843,93 @@ describe('translation-only rendering', () => {
     replaceWithTranslation(blocks, ['一二三四五六'], { renderMode: 'translation-only' })
     expect(p.querySelector('.imp-translate-loading')).toBeNull()
     expect(p.textContent).toContain('Click here now')
+    const a = p.querySelector('a')!
+    expect(a.textContent).toBe('here')
+    expect(a.getAttribute('href')).toBe('/x')
+    // Untouched, so recheck sees an unchanged block rather than retrying.
+    expect(p.getAttribute('data-imp-text')).toBe(blocks[0]!.text)
   })
 
-  it('clears the ring when the runs come back reordered', () => {
-    // The reordered skip is a second, independent early-return. `clearInjectedWrappers`
-    // runs before it, so no ring is stranded; nothing currently pins that ordering.
-    const { p, blocks } = runsFixture()
-    p.setAttribute('data-imp-text', blocks[0]!.text)
-    injectLoading(blocks)
-    expect(p.querySelector('.imp-translate-loading')).not.toBeNull()
+  it('preserves block-edge whitespace while trimming it from the payload', () => {
+    // GitHub markdown and Wikipedia markup put indentation and newlines at a
+    // block's edges. They must not be sent to the provider — they would be
+    // "translated" — but they must survive the swap, or the page reflows.
+    document.body.innerHTML = '<p>\n  Click <a href="/x">here</a> now\n</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const blocks = [
+      { element: p, text: buildMarkedSource(['Click ', 'here', ' now']) },
+    ] as TranslatableBlock[]
 
-    replaceWithTranslation(blocks, ['⟦1⟧甲⟦3⟧丙⟦2⟧乙'], { renderMode: 'translation-only' })
+    injectLoading(blocks)
+    replaceWithTranslation(blocks, ['⟦1⟧点击⟦2⟧这里⟦3⟧立刻'], { renderMode: 'translation-only' })
+
+    expect(p.querySelector('a')!.textContent).toBe('这里')
+    expect(p.querySelector('a')!.getAttribute('href')).toBe('/x')
+    expect(
+      Array.from(p.childNodes)
+        .filter((n): n is Text => n.nodeType === Node.TEXT_NODE)
+        .map((n) => n.data),
+    ).toEqual(['\n  点击', '立刻\n'])
     expect(p.querySelector('.imp-translate-loading')).toBeNull()
-    expect(p.textContent).toBe('Click here now')
-    expect(p.getAttribute('data-imp-text')).toBe(blocks[0]!.text)
+  })
+
+  it('writes pieces into the surviving runs, not the raw run list', () => {
+    // A whitespace-only leading run is dropped from the payload, leaving 2
+    // runs where getTranslatableRuns reports 3. Indexing the raw list would
+    // hand the link the trailing piece and leave the tail untranslated.
+    document.body.innerHTML = '<p> <a href="/x">text</a> more</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const blocks = [
+      { element: p, text: buildMarkedSource(['text', ' more']) },
+    ] as TranslatableBlock[]
+
+    replaceWithTranslation(blocks, ['⟦1⟧文本⟦2⟧ 更多'], { renderMode: 'translation-only' })
+
+    expect((p.firstChild as Text).data).toBe(' ')
+    expect(p.querySelector('a')!.textContent).toBe('文本')
+    expect((p.lastChild as Text).data).toBe(' 更多')
+  })
+
+  it('aligns a multi-link block whose separator runs are whitespace-only', () => {
+    // The Wikipedia "Recently featured" shape: adjacent links, an indented head,
+    // and whitespace-only runs between and after them. Separators carry no
+    // words, so they are untagged and their ids are missing from the response —
+    // hence the links' sparse ids rather than a renumbering.
+    document.body.innerHTML =
+      '<p>\n  Recently featured: <a href="/a">"Blindfold Me"</a> <a href="/b">Kaiser-class battleship</a> <a href="/c">Independence Day (Nigeria)</a>\n</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const blocks = [
+      {
+        element: p,
+        text: buildMarkedSource([
+          'Recently featured: ',
+          '"Blindfold Me"',
+          ' ',
+          'Kaiser-class battleship',
+          ' ',
+          'Independence Day (Nigeria)',
+        ]),
+      },
+    ] as TranslatableBlock[]
+
+    injectLoading(blocks)
+    replaceWithTranslation(
+      blocks,
+      ['⟦1⟧最近精选：⟦2⟧“盲目” ⟦4⟧皇帝级战列舰 ⟦6⟧尼日利亚独立日'],
+      { renderMode: 'translation-only' },
+    )
+
+    const links = Array.from(p.querySelectorAll('a'))
+    expect(links.map((a) => a.textContent)).toEqual(['“盲目” ', '皇帝级战列舰 ', '尼日利亚独立日'])
+    expect(links.map((a) => a.getAttribute('href'))).toEqual(['/a', '/b', '/c'])
+    // The head is re-attached on write; the two separators and the trailing
+    // newline were never tagged, so they are untouched.
+    expect(
+      Array.from(p.childNodes)
+        .filter((n): n is Text => n.nodeType === Node.TEXT_NODE)
+        .map((n) => n.data),
+    ).toEqual(['\n  最近精选：', ' ', ' ', '\n'])
+    expect(p.querySelector('.imp-translate-loading')).toBeNull()
   })
 
   it('leaves the block exactly as it was when translations are cleared', () => {
@@ -876,16 +983,29 @@ describe('bilingual rendering with a marked payload', () => {
     expect(p.textContent).not.toMatch(/[⟦⟧]/)
   })
 
-  // Markers carry run ids, so a plain strip would leave the response in the
-  // order the provider returned it. The exact split path is what undoes a
-  // reorder, and bilingual has to use it just as translation-only does.
-  it('rejoins reordered pieces in run order', () => {
+  // The response carries the target language's word order, so the block shows
+  // the provider's own sentence: `plain` is the response with its markers
+  // removed, in that order, with nothing dropped.
+  it('shows the response text in the provider output order', () => {
     const { p, blocks } = linkFixture()
     injectLoading(blocks)
     replaceWithTranslation(blocks, ['⟦3⟧立刻⟦1⟧点击⟦2⟧这里'])
 
     const wrapper = p.querySelector('font.imp-translate-result')!
-    expect(wrapper.textContent).toBe('点击这里立刻')
+    expect(wrapper.textContent).toBe('立刻点击这里')
+  })
+
+  it('keeps the text of a run with no words of its own', () => {
+    // Bilingual shows one string for the whole block, so nothing may be
+    // dropped — including the piece for a digits-only run, which is content.
+    document.body.innerHTML = '<p>Total: <b>123</b> items</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const blocks = extractBlocks(document.body) as TranslatableBlock[]
+    injectLoading(blocks)
+    replaceWithTranslation(blocks, ['⟦1⟧总计：⟦2⟧123⟦3⟧ 项'])
+
+    const wrapper = p.querySelector('font.imp-translate-result')!
+    expect(wrapper.textContent).toBe('总计：123 项')
   })
 
   // The noop comparison used to be against `block.text`, which is now marked,

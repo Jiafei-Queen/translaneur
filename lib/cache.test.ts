@@ -76,13 +76,14 @@ describe('cache', () => {
   // The previous revision's key is hard-coded rather than derived from the
   // constant: this must fail the day the wire form changes again and nobody
   // bumps the revision, which is when every cached entry starts serving the
-  // previous wire form's translation for 30 days. The stored value is the
-  // `扩大` fragment translation the `<x id>` era produced — wrong, not stale.
+  // previous wire form's translation for 30 days. The stored value is what the
+  // empty `<i id="N"></i>` form produced on CJK source — one merged run, so the
+  // marker for every run but the first is gone.
   it('should not read entries written under the previous wire form', async () => {
     const db = await openDB('imp-translate', 1)
     await db.put('translations', {
-      key: '1:zh:hello',
-      text: '<x id="1"></x>扩大',
+      key: '2:zh:hello',
+      text: '<i id="1"></i>Click the button below to start using this browser extension.',
       ts: Date.now(),
     })
     db.close()

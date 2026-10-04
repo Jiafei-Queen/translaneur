@@ -66,6 +66,16 @@ This corrects an earlier reading of `imp/lib/segments.ts`, which fills by
 output order. That is right for a renderer that rebuilds the block, and wrong
 for one that writes into fixed slots. See below.
 
+**Correction (second round).** The id remap is right, and the *output order* is
+what gets written — see
+[the second round](#second-round-the-marker-has-to-carry-its-run). "Wrong for a
+renderer that writes into fixed slots" was true of the renderer that refused to
+move anything; the shipped one writes whatever order the provider returned, so
+filling by appearance order is exactly what it does. What survives from this
+section is the measurement: Google preserves the `id` attribute, and the ids are
+a **validity check** on a response (every sent id exactly once), not a slot
+assignment.
+
 ## LLM providers reorder too
 
 `gpt-6-luna` was asked to keep `⟦N⟧` intact and did so on every request — 7/7 on
@@ -108,10 +118,16 @@ it is the ceiling of an in-place write.
 Which is also the honest scope of this mode. `buildMarkedSource` skips marking
 single-run blocks, and a single-run block needs no alignment — so the blocks
 where translation-only is visibly *different* from bilingual are exactly the
-multi-run blocks, which are exactly the blocks that cannot express reordering.
-The mode is a performance trade: no clone, no reparent, no rebuild, at the
-price of holding source word order. For a language whose order resembles the
-source's that is nearly invisible; for SOV it is not.
+multi-run blocks.
+
+**Correction (second round).** The ceiling belongs to *id-keyed* write-back, not
+to in-place writing. Writing the pieces in the provider's output order
+reassembles the sentence correctly inside the same fixed slots; what it cannot do
+is keep each inline element on the words it started with, measured at 12–50% of
+inline-bearing blocks. That drift is accepted deliberately — see
+[the second round](#second-round-the-marker-has-to-carry-its-run). The
+"performance trade at the price of holding source word order" framing below is
+therefore superseded: the mode keeps the *words*, not the slot-to-word mapping.
 
 ## Proposed changes
 
@@ -230,13 +246,16 @@ verified, and it costs a per-frame queue and a cache reset.
 
 ## Code map
 
+Current symbols; the names used by earlier rounds are in the sections above.
+
 | File | Symbol | Role |
 | --- | --- | --- |
-| `lib/align.ts` | `googleRunMarker` | Google wire tag; the class here decides reorder. |
-| `lib/align.ts` | `splitTranslation` | Id-keyed write-back; correct under reordering, and the source of the `reordered` signal. |
-| `lib/dom.ts` | `swapTextNodes` | The ceiling: fixed slots, source order. |
-| `lib/render.ts` | `replaceWithTranslation` | Where `reordered` would extend the skip guard. |
-| `lib/cache.ts` | `PROMPT_REVISION` | One revision for four providers. |
+| `lib/align.ts` | `toGoogleMarkupSource` | Google wire tag: `<i id="N">run text</i>` per tagged run, passthrough runs bare. |
+| `lib/align.ts` | `isPassthroughRun` | Runs with no words: untagged on the wire, unwritten on the page. |
+| `lib/align.ts` | `splitTranslation` | Pieces in the provider's output order; the ids are a validity check on the response, not a slot map. |
+| `lib/dom.ts` | `swapTextNodes` | The fixed slots; the inline-boundary drift happens here. |
+| `lib/render.ts` | `replaceWithTranslation` | Writes the pieces in output order; the `!exact` guard is the one remaining skip. |
+| `lib/cache.ts` | `PROMPT_REVISION` | One revision for four providers; bumped for the wire form. |
 
 ## Not covered
 
@@ -251,6 +270,11 @@ verified, and it costs a per-frame queue and a cache reset.
   default. A model given budget to think may reorder more or less.
 
 ## Outcome
+
+**The wire form and the `reordered` signal recorded below were superseded by
+[the second round](#second-round-the-marker-has-to-carry-its-run).** What still
+holds from this round: the tag-class rule, the pair-capturing parse, and the
+`!exact`-only fallback guard.
 
 Proposals 1–4 shipped; 5 and 6 were deferred, as proposed. Three of the
 proposals needed correction on the way in.
@@ -332,3 +356,93 @@ guard alone governs that path, as it did before.
   production, so the rate that decides whether a rewrite path is worth its cost
   cannot be read. The `debugMode` flag and `debugTime` are already available in
   `entrypoints/inject.ts`; nothing was added in this change.
+
+## Second round: the marker has to carry its run
+
+Measured on 2026-10-05, after the wire form above had shipped, on **CJK source**.
+The empty `<i id="N"></i>` is not inert-but-present there. It is dropped.
+
+### The finding
+
+Live `translateHtml`, five CJK blocks, the shipped form against the candidates:
+
+| Marker | ids returned (ZH source) | `exact` |
+| --- | --- | --- |
+| `<i id="N"></i>` empty, quoted (shipped) | `[1]` | false |
+| `<x id="N"></x>` empty pair | `[1,2,3]` | true, but fragment translation |
+| `<span id="N"></span>` empty | `[1,2,3]` | true, but fragment translation (and inert) |
+| `⟦N⟧` plain text | `[1,2,3]` | true, in order |
+| `<i id="N">text</i>` wrapping | `[1,3,2]` … | true, reordered |
+
+The discriminator is the **source script**, not the target: ZH→EN, ZH→JA,
+ZH→FR and JA→EN all return ids `[1]`, while EN→DE and EN→JA return every id.
+That is how the earlier round measured clean — every capture in this document is
+Latin source.
+
+The chain: only `id="1"` comes back → `splitTranslation` reports `exact: false`
+→ `replaceWithTranslation` refuses an unverified write into a block with any
+descendant element → that block keeps its source. Blocks with no descendant
+element still take the proportional fallback and are written. That is exactly
+the reported symptom: *only some headings came out translated*.
+
+Live proof, five CJK blocks × en/ja/fr/de, `exact` after splitting the real
+response: empty prefix form **0/20**, wrapping form **20/20**.
+
+### The passthrough rule
+
+Sending a whitespace-only run as a tagged segment makes Google nest the next tag
+inside it — `<i id=2><i id=3>part</i></i>` — losing id 3. Sent bare, the ids come
+back intact (`1,2,4,6`) with no nesting: the endpoint needs the separator, not
+the tag. Translation quality is identical across all-tagged, bare and filtered.
+
+So `isPassthroughRun` (whitespace, brackets, digits, quotes) is the single
+definition both sides of the wire use. `toGoogleMarkupSource` leaves those runs
+bare, `splitTranslation` drops any piece that belongs to one, and
+`replaceWithTranslation` hands those nodes their own text back so nothing is
+written into them.
+
+The canonical `⟦N⟧` payload still marks every run, because a model handed a
+payload with holes in it fills them in. A response is therefore complete with
+either the wire form's tagged ids or every run id, once each — see
+[`translation-only-alignment.md`](translation-only-alignment.md). Ids stay the
+canonical run numbers, so the wire form's are sparse — no renumbering layer, and
+no id list plumbed between encode and decode.
+
+### Output order, and what it supersedes
+
+Strict source order holds for only 1/5–3/5 of CJK→X blocks; the rest come back
+in the target language's order. With the wrapping form in place a reorder is
+routine rather than rare, so `SplitResult.reordered`, the `if (reordered)`
+guard, and the "fixed slots cannot hold reordered text" framing all go: the
+pieces come back in the provider's output order and are written in document
+order.
+
+- `SplitResult` is `{ pieces, plain, exact }`. `pieces` holds one entry per run
+  that gets written, so `pieces.length` is not `runTexts.length`; `plain` is the
+  whole response with its markers removed, which is what the block-level
+  (bilingual) renderer shows. Joining `pieces` no longer reconstructs the block
+  — it lacks the passthrough runs' text, and that text can be content, not just
+  separation (a digits-only run). See
+  [`translation-only-alignment.md`](translation-only-alignment.md).
+- Superseded here: "Google wire form is `<i id="N"></i>`", "`PROMPT_REVISION`
+  → 2", "`SplitResult.reordered`", the `<x id>` golden fixture (that shape no
+  longer parses), and `WIRE_RESIDUE_RE`'s "a response cached before the change
+  still parses" — the revision bump retires those entries. `WIRE_RESIDUE_RE`
+  keeps covering the `<x id>` shape and `MARK_TAG_RE` keeps consuming the
+  opener, because page text can still carry either.
+- `stripMarkers` now reads the canonical `⟦N⟧` form only. Sharing `ANY_MARK_RE`
+  with the wire tag made it delete the run text that lives *inside* the tag —
+  the exact text it exists to preserve.
+- `PROMPT_REVISION` → 3: the cache stores the provider's raw response, and the
+  new parser reads an old empty-tag response as a mismatched id set.
+
+Accepted cost, and the reason this is a decision rather than a bug fix: inline
+boundaries drift in 12–50% of inline-bearing blocks — a link keeps its own
+`href` and shows a neighbouring run's words. The alternative was a scrambled
+sentence or an untranslated block.
+
+### Not measured
+
+Whether Microsoft or Imp lose the `⟦N⟧` markers on CJK source the way the empty
+`<i>` did. They never see a wire tag, and the bracket form came back in order on
+CJK, but that was only exercised against Google.

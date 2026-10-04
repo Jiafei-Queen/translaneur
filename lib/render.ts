@@ -1,5 +1,5 @@
-import { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, getTranslatableRuns, blockRunTexts, swapTextNodes, type TranslatableBlock } from './dom'
-import { buildMarkedSource, splitTranslation, stripMarkers } from './align'
+import { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, buildBlockSource, trimmedRuns, swapTextNodes, type TranslatableBlock } from './dom'
+import { buildMarkedSource, isPassthroughRun, splitTranslation, stripMarkers } from './align'
 import type { RenderMode } from './storage'
 import { LANGUAGES_SORTED } from './languages'
 
@@ -360,8 +360,8 @@ export function replaceWithTranslation(
     for (let i = 0; i < blocks.length; i++) {
       const { element, text } = blocks[i]
       const translated = translations[i]
-      const runs = getTranslatableRuns(element, opts.skipSelectors)
-      if (runs.length === 0) {
+      const { nodes, texts, head, tail } = trimmedRuns(element, opts.skipSelectors)
+      if (texts.length === 0) {
         // Nothing to write into; a ring here would spin with no text behind it.
         clearInjectedWrappers(element)
         continue
@@ -369,34 +369,35 @@ export function replaceWithTranslation(
       // Stale: the DOM moved under the in-flight request. The recheck pass
       // owns recovery via the token mismatch this leaves behind. The ring stays
       // up meanwhile — the block is still in flight as far as the user knows.
-      if (buildMarkedSource(runs.map((r) => r.data)) !== text) continue
+      if (buildMarkedSource(texts) !== text) continue
       if (!translated) {
         clearInjectedWrappers(element)
         continue
       }
       clearInjectedWrappers(element)
-      const { pieces, exact, reordered } = splitTranslation(translated, runs.map((r) => r.data))
-      // Two different guards, for two different harms:
-      //
+      const { pieces, exact } = splitTranslation(translated, texts)
       // Fallback cuts at offsets unrelated to the run boundaries, so a block
       // with any descendant element (link, inline styling) would get a link's
       // own text split in half. A missing translation beats a clickable link
       // leading somewhere meaningless.
       if (!exact && element.querySelector('*') !== null) continue
-      //
-      // Reordered means the provider moved the runs to the target language's
-      // word order. The pieces are id-correct, but the runs below sit in fixed
-      // source-order slots — there is nowhere to put the move, so writing them
-      // scrambles the sentence while reporting a clean alignment. This bites
-      // comment-separated runs too, which have no descendant element, which is
-      // why it does not share the condition above.
-      //
-      // Leaving the token untouched keeps recheck from retrying forever.
-      if (reordered) continue
-      swapTextNodes(runs, pieces)
+      // Pieces index the *tagged* runs, in the provider's output order, so
+      // writing them into document-order slots rebuilds the sentence the
+      // provider wrote. A passthrough run gets its own text back, which is what
+      // swapTextNodes reads as "leave this node and its whitespace alone" — and
+      // which is why head/tail are re-attached only where a node is written.
+      let piece = 0
+      const writes = nodes.map((node, k) =>
+        isPassthroughRun(texts[k]!) ? node.data : (pieces[piece++] ?? node.data),
+      )
+      if (!isPassthroughRun(texts[0]!)) writes[0] = head + writes[0]!
+      const lastRun = texts.length - 1
+      if (!isPassthroughRun(texts[lastRun]!)) writes[lastRun] = writes[lastRun]! + tail
+      swapTextNodes(nodes, writes)
       // Token must equal what currentBlockSource computes now that the runs
-      // hold the translated text — keeps flushRecheck self-consistent.
-      element.setAttribute('data-imp-text', buildMarkedSource(runs.map((r) => r.data)))
+      // hold the translated text. Recomputed from the mutated DOM rather than
+      // from `writes`, so a piece translating to empty cannot make them differ.
+      element.setAttribute('data-imp-text', buildBlockSource(element, opts.skipSelectors))
     }
     return
   }
@@ -408,17 +409,14 @@ export function replaceWithTranslation(
     if (!wrapper) continue
 
     // The run texts come from the DOM, not by re-parsing the markers: bilingual
-    // never writes into the runs, so they still hold exactly what the request
-    // was built from — whereas parsing the marked string would misread a page's
-    // own `⟦1⟧` in a single-run block as a marker and split the response into
-    // pieces that do not exist. blockRunTexts is the same trim the request used.
-    const runTexts = blockRunTexts(element, opts?.skipSelectors)
-    // Markers carry run ids, and a provider that reorders segments is exactly
-    // what splitTranslation's exact path exists to undo — so the plain text is
-    // rejoined in run order, not stripped. The fallback path joins back to the
-    // marker-free source, so the lossy case degrades to the original text rather
-    // than to scrambled segments.
-    const plain = translated ? splitTranslation(translated, runTexts).pieces.join('') : ''
+    // never writes into the runs, so they still hold what the request was built
+    // from — whereas parsing would misread a page's own `⟦1⟧` in a single-run
+    // block as a marker and split the response into pieces that do not exist.
+    const { texts: runTexts } = trimmedRuns(element, opts?.skipSelectors)
+    // `pieces` is not usable here: it holds one entry per *written* run, so
+    // joining it would drop a passthrough run's text — a separator, or a
+    // digits-only run — from the block.
+    const plain = translated ? splitTranslation(translated, runTexts).plain : ''
 
     // Compared against the marker-free source: `text` is marked, so comparing
     // against it never matches, and a provider's verbatim echo would be written

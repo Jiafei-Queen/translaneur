@@ -88,12 +88,11 @@ describe('stripMarkers', () => {
     expect(stripMarkers('⟦1⟧a⟦2⟧b⟦3⟧c')).toBe('abc')
   })
 
-  it('removes the Google x-tag form too', () => {
-    expect(stripMarkers('<x id="1"></x>Click<x id="2"></x>here')).toBe('Clickhere')
-  })
-
-  it('removes the Google inline-tag form too', () => {
-    expect(stripMarkers('<i id="1"></i>Click<i id="2"></i>here')).toBe('Clickhere')
+  it('leaves a wire tag alone, since it is not a canonical marker', () => {
+    // The wire tag holds its run's translated text *inside* itself, so treating
+    // that shape as a marker would delete the text this function exists to keep.
+    expect(stripMarkers('<i id="1">Click</i>')).toBe('<i id="1">Click</i>')
+    expect(stripMarkers('<i id="1"></i>here')).toBe('<i id="1"></i>here')
   })
 
   it('round-trips buildMarkedSource for multi-run blocks', () => {
@@ -107,20 +106,29 @@ describe('toGoogleMarkupSource', () => {
     expect(toGoogleMarkupSource('a <b> & c', esc)).toBe(esc('a <b> & c'))
   })
 
-  it('emits raw empty tags for markers and escapes run text only', () => {
+  it('wraps each run in its tag and escapes the run text only', () => {
     expect(toGoogleMarkupSource('⟦1⟧a⟦2⟧b⟦3⟧c', esc)).toBe(
-      '<i id="1"></i>a<i id="2"></i>b<i id="3"></i>c',
+      '<i id="1">a</i><i id="2">b</i><i id="3">c</i>',
     )
   })
 
-  it('escapes markup inside run text but not the markers', () => {
+  it('escapes markup inside run text but leaves the tags alone', () => {
     expect(toGoogleMarkupSource('⟦1⟧<b>⟦2⟧&x', esc)).toBe(
-      '<i id="1"></i>&lt;b&gt;<i id="2"></i>&amp;x',
+      '<i id="1">&lt;b&gt;</i><i id="2">&amp;x</i>',
     )
   })
 
   it('treats text before the first marker as run text', () => {
-    expect(toGoogleMarkupSource('pre⟦1⟧a', esc)).toBe(esc('pre') + '<i id="1"></i>a')
+    expect(toGoogleMarkupSource('pre⟦1⟧a', esc)).toBe(esc('pre') + '<i id="1">a</i>')
+  })
+
+  it('sends a passthrough run bare, leaving the next run its own id', () => {
+    expect(toGoogleMarkupSource('⟦1⟧这是⟦2⟧第一⟦3⟧ ⟦4⟧部分', esc)).toBe(
+      '<i id="1">这是</i><i id="2">第一</i> <i id="4">部分</i>',
+    )
+    expect(toGoogleMarkupSource('⟦1⟧a⟦2⟧123⟦3⟧b', esc)).toBe(
+      '<i id="1">a</i>123<i id="3">b</i>',
+    )
   })
 
   it('is stateless across calls', () => {
@@ -132,32 +140,84 @@ describe('toGoogleMarkupSource', () => {
 
 describe('splitTranslation', () => {
   it('passes single-run translations through verbatim', () => {
+    // `plain` stays verbatim too: nothing was marked, so nothing is stripped —
+    // a `⟦N⟧` here is the page's own text.
     expect(splitTranslation('hello ⟦2⟧', ['x'])).toEqual({
       pieces: ['hello ⟦2⟧'],
+      plain: 'hello ⟦2⟧',
       exact: true,
-      reordered: false,
     })
   })
 
   it('returns no pieces for zero runs', () => {
-    expect(splitTranslation('anything', [])).toEqual({
-      pieces: [],
-      exact: true,
-      reordered: false,
-    })
+    expect(splitTranslation('anything', [])).toEqual({ pieces: [], plain: 'anything', exact: true })
   })
 
-  it('maps pieces by marker id when segments are reordered', () => {
+  it('returns pieces in the order the provider wrote them, not by id', () => {
     expect(splitTranslation('X⟦2⟧B⟦1⟧A', ['a', 'b'])).toEqual({
-      pieces: ['A', 'XB'],
+      pieces: ['XB', 'A'],
+      plain: 'XBA',
       exact: true,
-      reordered: true,
+    })
+    expect(splitTranslation('<i id="2">B</i><i id="1">A</i>', ['a', 'b'])).toEqual({
+      pieces: ['B', 'A'],
+      plain: 'BA',
+      exact: true,
     })
   })
 
   it('prepends the orphan prefix to the first-appearing marker run', () => {
-    const out = splitTranslation('[翻译] ⟦1⟧Go to Page 2⟦2⟧\n  ', ['Go to Page 2', '\n  '])
-    expect(out).toEqual({ pieces: ['[翻译] Go to Page 2', '\n  '], exact: true, reordered: false })
+    expect(splitTranslation('[翻译] ⟦1⟧A⟦2⟧B', ['a', 'b'])).toEqual({
+      pieces: ['[翻译] A', 'B'],
+      plain: '[翻译] AB',
+      exact: true,
+    })
+  })
+
+  it('leaves a passthrough run out of the piece list', () => {
+    // The middle run holds only whitespace, so it was never tagged and comes
+    // back as bare characters: the space rides on the preceding piece.
+    expect(splitTranslation('<i id="1">A</i> <i id="3">C</i>', ['a', ' ', 'c'])).toEqual({
+      pieces: ['A ', 'C'],
+      plain: 'A C',
+      exact: true,
+    })
+  })
+
+  it('accepts a response that marks every run, dropping the passthrough piece', () => {
+    // The canonical `⟦N⟧` payload marks every run, so a plain-text or model
+    // provider legitimately answers with all three ids — including one for the
+    // whitespace run. That piece is dropped by `pieces`; `plain` keeps it,
+    // which is what the block-level (bilingual) renderer needs.
+    expect(
+      splitTranslation('⟦1⟧[翻译] Go to Page 2⟦2⟧\n  ⟦3⟧Open PDF', [
+        'Go to Page 2',
+        '\n  ',
+        'Open PDF',
+      ]),
+    ).toEqual({
+      pieces: ['[翻译] Go to Page 2', 'Open PDF'],
+      plain: '[翻译] Go to Page 2\n  Open PDF',
+      exact: true,
+    })
+  })
+
+  it('gives the orphan prefix to the first kept piece', () => {
+    // Run 1 holds only digits, so its run is not written; the text the provider
+    // put before its first mark belongs with the first piece that survives.
+    expect(splitTranslation('[翻译] ⟦1⟧123⟦2⟧甲⟦3⟧乙', ['123', 'a', 'b'])).toEqual({
+      pieces: ['[翻译] 甲', '乙'],
+      plain: '[翻译] 123甲乙',
+      exact: true,
+    })
+  })
+
+  it('falls back when a tagged run never came back', () => {
+    // The Google wire form sent ids 1 and 3; only 1 returned. A partial
+    // response is not an alignment.
+    const out = splitTranslation('<i id="1">A</i>', ['a', ' ', 'c'])
+    expect(out.exact).toBe(false)
+    expect(out.pieces).toEqual(['A', ''])
   })
 
   it('falls back when a marker id is missing', () => {
@@ -170,7 +230,7 @@ describe('splitTranslation', () => {
     expect(splitTranslation('⟦1⟧ab⟦1⟧cd', ['x', 'y']).exact).toBe(false)
   })
 
-  it('falls back on out-of-range marker ids', () => {
+  it('falls back on marker ids that were never sent', () => {
     const out = splitTranslation('⟦9⟧X⟦3⟧Y', ['a', 'b'])
     expect(out.exact).toBe(false)
     expect(out.pieces).toEqual(['X', 'Y'])
@@ -179,8 +239,16 @@ describe('splitTranslation', () => {
   it('splits proportionally by run length without markers', () => {
     expect(splitTranslation('123456', ['abc', 'de'])).toEqual({
       pieces: ['1234', '56'],
+      plain: '123456',
       exact: false,
-      reordered: false,
+    })
+  })
+
+  it('cuts the fallback by tagged-run length, skipping passthrough runs', () => {
+    expect(splitTranslation('abcd', ['ab', ' ', 'cd'])).toEqual({
+      pieces: ['ab', 'cd'],
+      plain: 'abcd',
+      exact: false,
     })
   })
 
@@ -191,28 +259,6 @@ describe('splitTranslation', () => {
     expect(out.pieces.some((p) => /[⟦⟧]/.test(p))).toBe(false)
   })
 
-  it('maps Google x-tag markers by id when segments are reordered', () => {
-    expect(splitTranslation('<x id="2"></x>B<x id="1"></x>A', ['a', 'b'])).toEqual({
-      pieces: ['A', 'B'],
-      exact: true,
-      reordered: true,
-    })
-  })
-
-  it('scans both marker syntaxes in one ordered pass', () => {
-    expect(splitTranslation('⟦2⟧B<x id="1"></x>A', ['a', 'b'])).toEqual({
-      pieces: ['A', 'B'],
-      exact: true,
-      reordered: true,
-    })
-  })
-
-  it('strips x-tag residue after fallback', () => {
-    const out = splitTranslation('<x id="1"></x>abc⟦3⟧def', ['a', 'b', 'c'])
-    expect(out.exact).toBe(false)
-    expect(out.pieces.join('')).toBe('abcdef')
-  })
-
   it('strips inline-tag residue after fallback', () => {
     const out = splitTranslation('<i id="1"></i>abc<i id="3"></i>def', ['a', 'b', 'c'])
     expect(out.exact).toBe(false)
@@ -221,8 +267,7 @@ describe('splitTranslation', () => {
 
   // Below are real captured responses, not hand-written shapes — see
   // docs/marker-behaviour.md. They are what the shipped providers actually
-  // return for one fixed paragraph, EN→ZH, and the difference between the
-  // first two is the whole reason the wire tag changed.
+  // return for one fixed paragraph, EN→ZH.
   const RUNS = [
     'Translaneur is a ',
     'cross-platform ',
@@ -233,33 +278,11 @@ describe('splitTranslation', () => {
     'pages.',
   ]
 
-  it('parses a legacy <x id> response, which is inert rather than wrong', () => {
-    // Marks all present, order untouched, translation dead: `extension` → 扩大,
-    // the expansion of something. This is what a fragment-by-fragment
-    // translation looks like while reporting a perfect alignment, so `exact`
-    // says nothing about whether the text is any good.
-    const out = splitTranslation(
-      '<x id="1"></x>Translaneur 是一家<x id="2"></x>跨平台<x id="3"></x>浏览器' +
-        '<x id="4"></x>扩大<x id="5"></x>供阅读<x id="6"></x>外国的<x id="7"></x>页数。',
-      RUNS,
-    )
-    expect(out.pieces).toEqual([
-      'Translaneur 是一家',
-      '跨平台',
-      '浏览器',
-      '扩大',
-      '供阅读',
-      '外国的',
-      '页数。',
-    ])
-    expect(out.exact).toBe(true)
-    expect(out.reordered).toBe(false)
-  })
-
-  it('parses an inline-tag response and keeps inter-run text with its run', () => {
-    // Same source and target with a known inline tag. The endpoint moved the
-    // runs to 1,5,6,2,3,4,7 and the text is an ordinary translation. `网页的`
-    // sits between the closing tag and the next marker and belongs to run 6.
+  it('parses an inline-tag response in output order, keeping inter-run text', () => {
+    // The endpoint moved the runs to 1,5,6,2,3,4,7 and the text is an ordinary
+    // translation. `网页的` sits between the closing tag and the next mark and
+    // belongs to run 6 — the tag it follows in the output, not the slot it
+    // occupies on the page.
     const out = splitTranslation(
       '<i id="1">Translaneur 是一款</i><i id="5">用于阅读</i><i id="6">外文</i>网页的' +
         '<i id="2">跨平台</i><i id="3">浏览器</i><i id="4">扩展程序</i><i id="7">。</i>',
@@ -267,15 +290,14 @@ describe('splitTranslation', () => {
     )
     expect(out.pieces).toEqual([
       'Translaneur 是一款',
+      '用于阅读',
+      '外文网页的',
       '跨平台',
       '浏览器',
       '扩展程序',
-      '用于阅读',
-      '外文网页的',
       '。',
     ])
     expect(out.exact).toBe(true)
-    expect(out.reordered).toBe(true)
   })
 
   it('does not let an unterminated inline tag swallow the rest of the response', () => {
@@ -297,10 +319,9 @@ describe('splitTranslation', () => {
     expect(out.pieces).toEqual(['keep</i>', 'more'])
   })
 
-  it('reports a reordered model response instead of silently scrambling it', () => {
-    // gpt-6-luna, `⟦N⟧` moved to 1,6,7,2,3,4,5 — the target word order. The
-    // pieces are id-correct, but the runs hold fixed source-order slots, so a
-    // caller writing them in place would show this nonsense.
+  it('returns a reordered model response in the target word order', () => {
+    // gpt-6-luna, `⟦N⟧` moved to 1,6,7,2,3,4,5 — the target word order. Pieces
+    // come back in that order because that is the order they get written in.
     const out = splitTranslation(
       '⟦1⟧Translaneurは、⟦6⟧外国語⟦7⟧のページを読むための⟦2⟧クロスプラットフォーム対応' +
         '⟦3⟧ブラウザー⟦4⟧拡張機能⟦5⟧です。',
@@ -308,19 +329,21 @@ describe('splitTranslation', () => {
     )
     expect(out.pieces).toEqual([
       'Translaneurは、',
+      '外国語',
+      'のページを読むための',
       'クロスプラットフォーム対応',
       'ブラウザー',
       '拡張機能',
       'です。',
-      '外国語',
-      'のページを読むための',
     ])
     expect(out.exact).toBe(true)
-    expect(out.reordered).toBe(true)
   })
 
-  it('reports no reordering when a response keeps source order', () => {
-    const out = splitTranslation('⟦1⟧a⟦2⟧b⟦3⟧c', ['a', 'b', 'c'])
-    expect(out.reordered).toBe(false)
+  it('keeps source order when the response kept it', () => {
+    expect(splitTranslation('⟦1⟧a⟦2⟧b⟦3⟧c', ['a', 'b', 'c'])).toEqual({
+      pieces: ['a', 'b', 'c'],
+      plain: 'abc',
+      exact: true,
+    })
   })
 })

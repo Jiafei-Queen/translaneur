@@ -14,7 +14,7 @@ Maintainer-facing. For what the user sees, see the Features section of
 
 Three parts.
 
-- **`PROMPT_REVISION`** — a constant in `lib/cache.ts`, currently `2`. Retires
+- **`PROMPT_REVISION`** — a constant in `lib/cache.ts`, currently `3`. Retires
   every entry written under an earlier prompt or wire form. See
   [Prompt revision](#prompt-revision).
 - **`targetLang`** — the only settings-derived input. Switching the target
@@ -40,8 +40,8 @@ sent the marked form. Two different strings for one piece of page text, so
 switching modes missed every entry. For a user on their own OpenAI key that
 meant paying twice for the same content.
 
-The markers never reach the page. Bilingual rejoins the response in run order
-before writing the wrapper — see `replaceWithTranslation` in `lib/render.ts`.
+The markers never reach the page. Bilingual writes the response with its markers
+removed — see `replaceWithTranslation` in `lib/render.ts`.
 
 ## Normalization
 

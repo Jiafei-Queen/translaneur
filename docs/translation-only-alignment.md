@@ -28,7 +28,7 @@ provider-specific because survival is not:
 
 | Provider | Marker | Endpoint behaviour |
 | --- | --- | --- |
-| Google (`translateHtml`) | `<i id="N"></i>` | Parses markup; a known inline tag survives as an anchor and comes back wrapping its run, `<i id="N">translated</i>`, ids intact but possibly relocated. |
+| Google (`translateHtml`) | `<i id="N">text</i>` | Parses markup; a known inline tag survives as an anchor and comes back wrapping its run, ids intact but possibly relocated. |
 | Microsoft, Imp, OpenAI | `⟦N⟧` | Plain-text endpoints pass it through; a model reinterprets it and may move the text. |
 
 Measured on real prose, one Wikipedia article kept only 2 of 21 `⟦N⟧` markers.
@@ -36,24 +36,60 @@ Synthetic inputs (`word1 word2 …`) survive reliably, which is exactly why an
 earlier synthetic-only spike produced a confident wrong answer. Do not validate
 marker survival on synthetic text.
 
-**Correction.** Survival and reordering are properties of the **tag class**, not
-of the provider. An unknown empty tag survives just as reliably and is inert, so
-Google cannot reorder across it and every run comes back translated as an
-isolated fragment — `extension` → 扩大, the expansion of something — while the ids
-return in source order and alignment reports a perfect match. That is why this
-table once specified `<x id="N"></x>` for Google: it was chosen on survival
-evidence alone, and survival was the wrong thing to measure. See
-[`marker-behaviour.md`](marker-behaviour.md) for the captures.
+**Correction.** Two things decide survival, and neither of them is the provider.
+
+The **tag class** decides whether the endpoint can move the tag. An unknown
+empty tag — `<x id="N"></x>` — survives and is inert: Google cannot reorder
+across it, so every run comes back translated as an isolated fragment
+(`extension` → 扩大, the expansion of something) while the ids return in source
+order and alignment reports a perfect match. That is why this table once
+specified it for Google: it was chosen on survival evidence alone, and survival
+was the wrong thing to measure.
+
+The **marker has to carry its run**. An empty tag, known or not, is dropped
+outright when the source is CJK — Google returns one merged translation with
+only the first id — while the same tag on a Latin source keeps every one. The
+empty `<i id="N"></i>` therefore looked correct on the English samples this
+table was built from, and silently lost every marker on Chinese and Japanese
+pages. `<i id="N">text</i>` is an anchor under either source script. See
+[`marker-behaviour.md`](marker-behaviour.md) for the captures and the survival
+matrix.
 
 Two constraints follow from the Google row:
 
 - **Escaping must be selective.** `escapeHtml`-ing the whole source turns
-  `<i id="1"></i>` into inert text and no markers come back. Only run text is
+  `<i id="1">` into inert text and no markers come back. Only run text is
   escaped — see `toGoogleMarkupSource` in `lib/align.ts`.
 - **The tag must be one the endpoint knows.** An unknown tag is inert. Earlier
   notes here recorded "empty paired tags only" from a comparison in which every
   candidate — `<span>`, `<div>`, `<font>`, self-closing forms — was unknown to
   the endpoint and lost the markers. A *known* inline tag is not in that class.
+
+### Runs with no words
+
+A run that holds nothing but whitespace, brackets, digits or quotes
+(`isPassthroughRun`) is sent as **bare text, with no tag**, and nothing is ever
+written back into it. It has no translation of its own, and tagging it is worse
+than useless: Google answers `<i id="3"> </i>` by nesting the next tag inside it,
+`<i id="2"><i id="3">part</i></i>`, which loses id 2 and sends the block to the
+fallback.
+
+The bare characters still reach the endpoint as the separator between the runs
+around them, and the node keeps exactly what the page had it holding — so a
+provider that drops the space cannot lose it. `head`/`tail` re-attachment skips
+those nodes for the same reason.
+
+Ids stay the canonical run numbers, so the wire form's ids are **sparse**
+(`1,2,4,6`) when runs are skipped. The endpoint returns them unchanged — no
+renumbering, and no index-mapping layer.
+
+The canonical `⟦N⟧` payload is *not* sparse: it marks every run, because a model
+handed a payload with holes in it fills them in. So `splitTranslation` calls a
+response complete when it carries **either** the ids the wire form tagged **or**
+every run id, exactly once each, and either way drops the pieces belonging to
+passthrough runs. That also means a model that mislays the marker around a
+whitespace run — the one it has least reason to preserve — does not push the
+whole block to the fallback.
 
 ## Canonical form
 
@@ -66,7 +102,8 @@ It is the canonical form for **every** block, not just the ones that render in
 translation-only. The cache key is the reason: if the two display modes derived
 the payload differently, switching between them would miss every entry and
 re-translate the page. See [`cache.md`](cache.md). Bilingual pays the marker
-cost back by rejoining the pieces before writing, so the page never sees them.
+cost back by writing the response with its markers removed, so the page never
+sees them.
 
 `splitTranslation` parses **both** syntaxes in a single ordered scan. This is
 required, not defensive: the cache key is `lang:text` and carries no provider,
@@ -97,40 +134,48 @@ recheck pass sees an unchanged block and does not retry in a loop.
 Blocks with no element boundaries still get the proportional split — nothing
 visible can be broken there, so dropping the translation would be a pure loss.
 
-## When the runs come back reordered
+## Writing the pieces back
 
 `exact: true` is a statement about structure, not quality. Every marker can be
-present exactly once and the translation can still be a pile of fragments
-(see [`marker-behaviour.md`](marker-behaviour.md)), and the ids can arrive in
-target word order with a perfectly good translation attached to each.
+present exactly once and the translation can still be a pile of fragments (see
+[`marker-behaviour.md`](marker-behaviour.md)) — and the ids can arrive in the
+target language's word order with a perfectly good translation attached to each.
 
-The second case is the expensive one. `swapTextNodes` writes into runs whose
-positions are fixed at source order, so there is nowhere in the block to put a
-reordered run — the pieces are id-correct and the page would still read as
-nonsense. `splitTranslation` reports it, because `marks` is collected in
-appearance order and the signal costs nothing:
+That second case is the normal one, not the exception: a measured 38–75% of
+inline-bearing blocks come back with their tags in an order other than the
+source's, because that is where the target language puts them. So
+`splitTranslation` returns the pieces in the **provider's output order**, and
+`replaceWithTranslation` writes them into the runs in document order:
 
 ```ts
-if (reordered) continue
+let piece = 0
+const writes = nodes.map((node, k) =>
+  isPassthroughRun(texts[k]!) ? node.data : (pieces[piece++] ?? node.data),
+)
 ```
 
-That guard is deliberately separate from the `!exact` one above, not merged with
-it. They prevent different harms: `!exact` means the cut is arbitrary, and only
-a visible run boundary makes that visible. `reordered` means the word order
-moved, which scrambles *every* run — including in a block with no descendant
-element at all, such as one whose runs are separated only by a comment node,
-where `querySelector('*')` is `null` and the `!exact` guard would not fire.
+The sentence is the provider's, reassembled correctly. A piece is the text
+between its own mark and the next mark in appearance order, so text the provider
+pushed outside the tags lands with the piece it follows.
 
-Like the fallback path, it leaves the `data-imp-text` token untouched so
-recheck sees an unchanged block.
+The cost is inline boundaries. Runs are fixed slots, so when the word order
+moves, the words an inline element carries move with it: the link still points
+at its own `href`, and the text inside it is now a neighbouring run's. Measured
+at 12–50% of blocks. That is a real behaviour change, and it is deliberate —
+the alternatives were holding source order and showing a scrambled sentence, or
+skipping the block and leaving it in the original language. A sentence whose
+bold word is one word off beats both.
 
-This is also the honest scope of the mode: `buildMarkedSource` skips marking
+Like the fallback path, a skipped write leaves the `data-imp-text` token
+untouched, so recheck sees an unchanged block rather than retrying forever.
+
+This is also the honest scope of the mode. `buildMarkedSource` skips marking
 single-run blocks, and a single-run block needs no alignment, so the blocks
 where translation-only is visibly *different* from bilingual are exactly the
-multi-run blocks, which are exactly the blocks that cannot express reordering.
-Translation-only is a performance trade — no clone, no reparent, no rebuild — at
-the price of holding source word order. For a language whose order resembles the
-source's that is nearly invisible; for SOV it is not.
+multi-run blocks. Translation-only is a performance trade — no clone, no
+reparent, no rebuild — at the price of holding each inline element to the words
+it started with. For a language whose order resembles the source's that is
+nearly invisible; for SOV it is not.
 
 The same real-prose measurement that settled run markers also decided how a
 glossary reaches Google: an index-based text sentinel, neither a tag nor the
@@ -156,9 +201,15 @@ term itself. See [`glossary.md`](glossary.md).
   against, and sanitising only destroys page text (`⟦a, b⟧` is how Wikipedia
   writes a closed interval).
 - `PROMPT_REVISION` covers the marker wire form, not just the prompt. The cache
-  stores the provider's raw response, so every entry written under the old
-  `<x id>` form is not merely stale — it is the broken fragment translation — and
-  would otherwise be served as a hit for 30 days.
+  stores the provider's raw response, so every entry written under an older wire
+  form is not merely stale — it is a response the current parser reads wrongly —
+  and would otherwise be served as a hit for 30 days. It sits at 3 as of the
+  wrapped wire form.
+- A run that holds no words is never tagged and never written. Tagging one makes
+  Google emit the *next* tag nested inside it and lose that id; writing one puts
+  the provider's text into a node holding pure layout. Both sides of the wire
+  derive the tagged set from `isPassthroughRun`, so neither has to carry the
+  other's list of ids and the payload's ids stay sparse.
 - The payload a block is sent as, compared as `data-imp-text`, and rebuilt after
   a translation-only swap must all come from one function. Divergence here is
   what made a mode switch re-translate the page.
@@ -168,28 +219,33 @@ term itself. See [`glossary.md`](glossary.md).
 | File | Symbol | Role |
 | --- | --- | --- |
 | `lib/align.ts` | `buildMarkedSource` | Runs → canonical `⟦N⟧` source; strips forged markers from multi-run blocks. |
-| `lib/align.ts` | `stripMarkers` | Canonical source → the visible text underneath. |
-| `lib/align.ts` | `toGoogleMarkupSource` | Canonical source → Google wire form, escaping run text only. |
-| `lib/align.ts` | `splitTranslation` | Response → per-run pieces, all three marker syntaxes, with fallback and a `reordered` flag. |
+| `lib/align.ts` | `stripMarkers` | Canonical source → the visible text underneath. Reads the canonical form only — the wire tag carries its run's text, so matching it here would delete the text it is meant to keep. |
+| `lib/align.ts` | `isPassthroughRun` | A run with no words of its own: untagged on the wire, unwritten on the page. |
+| `lib/align.ts` | `toGoogleMarkupSource` | Canonical source → Google wire form: one wrapping tag per tagged run, passthrough runs bare, run text escaped. |
+| `lib/align.ts` | `splitTranslation` | Response → per-run pieces in the provider's output order, both marker syntaxes, with a proportional fallback. |
 | `lib/translator.ts` | `translateGoogle` | Chooses `toGoogleMarkupSource(text, escapeHtml)` per request. |
-| `lib/render.ts` | `replaceWithTranslation` | Writes pieces (translation-only) or the joined plain text (bilingual), or keeps the source when alignment is unverified or reordered. |
+| `lib/render.ts` | `replaceWithTranslation` | Writes pieces in output order (translation-only) or the response's plain text (bilingual), or keeps the source when alignment is unverified. |
 | `lib/dom.ts` | `getTranslatableRuns` | The runs themselves; same inclusion rules as visible-text extraction. |
 | `lib/dom.ts` | `buildBlockSource` | The runs as one payload, edge-whitespace-trimmed. |
 
 ## Tests
 
-`lib/align.unit.test.ts` covers all three syntaxes, including the "stateless
-across calls" case that guards the shared-regex `lastIndex` reset. Its three
-marker fixtures are **captured responses**, not hand-written shapes: the inert
-`<x id>` one, the `<i id>` one that reorders to `1,5,6,2,3,4,7`, and a model
-response that reorders `⟦N⟧` to `1,6,7,2,3,4,5`. `lib/render.test.ts` covers
-both skip paths and asserts the token stays untouched, so a future change that
-writes the token will fail the test rather than loop forever in production.
+`lib/align.unit.test.ts` covers both syntaxes and the passthrough ids, including
+the "stateless across calls" case that guards the shared-regex `lastIndex`
+reset. Its marker fixtures are **captured responses**, not hand-written shapes:
+the wrapped `<i id>` one whose ids come back as `1,5,6,2,3,4,7`, and a model
+response whose `⟦N⟧` come back as `1,6,7,2,3,4,5`.
+
+`lib/render.test.ts` pins the one remaining skip — an unverifiable cut inside a
+block with visible boundaries — and asserts the token stays untouched there, so
+a future change that writes the token fails a test instead of looping forever in
+production. It also pins output-order write-back including the boundary drift it
+causes, and that a passthrough node keeps its own text.
 
 `e2e/cache.spec.ts` pins the consequence of one payload for both modes: a
 Display switch adds nothing to the provider log. `e2e/content.spec.ts` drives a
 reordered response through the whole mock → service → renderer path, which is
-the only place the guard is proven reachable rather than merely present.
+the only place the write-back is proven reachable rather than merely present.
 
 `e2e/` exercises the openai mock provider, which takes the `⟦N⟧` path. The
 Google wire form has no e2e coverage because the mock provider is openai-based;

@@ -46,7 +46,7 @@ function getDB() {
  * The cache stores the provider's raw response, so a new wire form makes every
  * entry written under the old one wrong — not merely stale.
  */
-const PROMPT_REVISION = 2
+const PROMPT_REVISION = 3
 
 function cacheKey(text: string, targetLang: string): string {
   return `${PROMPT_REVISION}:${targetLang}:${text}`

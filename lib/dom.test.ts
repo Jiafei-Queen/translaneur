@@ -9,8 +9,9 @@ import {
   getTranslatableRuns,
   swapTextNodes,
   buildBlockSource,
+  trimmedRuns,
 } from './dom'
-import { stripMarkers } from './align'
+import { stripMarkers, buildMarkedSource } from './align'
 
 describe('extractBlocks', () => {
   beforeEach(() => {
@@ -1248,6 +1249,21 @@ describe('block payload', () => {
     // space is the gap between two segments and translation-only writes the runs
     // back individually.
     expect(buildBlockSource(p)).toBe('⟦1⟧Click ⟦2⟧here⟦3⟧ now')
+  })
+
+  it('keeps the run-to-node pairing and the stripped edge whitespace', () => {
+    document.body.innerHTML = '<p>\n  Check out <a href="/x">this site</a> today\n</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const { nodes, texts, head, tail } = trimmedRuns(p)
+    expect(nodes).toHaveLength(3)
+    expect(nodes[1]).toBe(p.querySelector('a')!.firstChild)
+    expect(texts).toEqual(['Check out ', 'this site', ' today'])
+    // head/tail record what was stripped, so the write-back can put it back.
+    expect(head).toBe('\n  ')
+    expect(tail).toBe('\n')
+    // The equality the renderer relies on when it checks staleness against the
+    // trimmed texts instead of re-walking the DOM.
+    expect(buildMarkedSource(texts)).toBe(buildBlockSource(p))
   })
 
   it('is empty for a block with no runs', () => {

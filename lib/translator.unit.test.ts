@@ -957,7 +957,7 @@ describe('Google translateHtml marker passthrough', () => {
     const result = await translate(['⟦1⟧a <b>⟦2⟧b'], 'zh', googleSettings)
 
     expect(sentTexts(fetchMock)).toEqual([
-      '<i id="1"></i>a &lt;b&gt;<i id="2"></i>b',
+      '<i id="1">a &lt;b&gt;</i><i id="2">b</i>',
     ])
     expect(result.texts).toEqual(['<i id="1">甲</i><i id="2">乙</i>'])
   })
@@ -989,7 +989,7 @@ describe('Google translateHtml marker passthrough', () => {
     )
 
     expect(sentTexts(fetchMock)).toEqual([
-      '<i id="1"></i>the <i id="2"></i>free<i id="3"></i> encyclopedia that <i id="4"></i>anyone<i id="5"></i> can edit.',
+      '<i id="1">the </i><i id="2">free</i><i id="3"> encyclopedia that </i><i id="4">anyone</i><i id="5"> can edit.</i>',
     ])
     const runs = ['the ', 'free', ' encyclopedia that ', 'anyone', ' can edit.']
     const split = splitTranslation(result.texts[0]!, runs)

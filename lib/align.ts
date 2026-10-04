@@ -1,121 +1,104 @@
 // A block's text-node runs, and how a translated block maps back onto them.
 //
 // A block is sent as one string, so a provider that reorders segments loses the
-// run boundaries. Each run is therefore prefixed with an id marker, and the
-// response is re-split on those ids.
+// run boundaries. Each run is therefore marked with an id, and the response is
+// re-split on those ids.
 //
 // Every block is sent marked, in both display modes. That is what makes the
 // cache key mode-independent — a bilingual run and a later translation-only run
 // of the same block ask for the same string, so the second one is a cache hit
-// instead of a second bill. The bilingual renderer pays the split back by
-// rejoining the pieces (see replaceWithTranslation), so the markers never reach
-// the page.
+// instead of a second bill. Bilingual shows the response's plain text instead
+// (see replaceWithTranslation), so the markers never reach the page.
 //
-// Two marker syntaxes exist, chosen per provider from measurements on real prose
-// (synthetic `word1 word2…` inputs are misleading — they preserve markers that
-// real text drops). What decides behaviour is not the provider but the *tag
-// class*: whether the marker carries semantic weight a translator can use as an
-// anchor. See docs/marker-behaviour.md for the captures.
+// Two syntaxes, one per transport. What decides survival is not the provider
+// but whether the marker is an anchor the translator can move; the captures are
+// in docs/marker-behaviour.md.
 //
-//   `<i id="N"></i>` — Google translateHtml, which parses markup. A known inline
-//                      tag is an anchor: the endpoint moves it to where the target
-//                      language wants it and returns the run wrapped in it,
-//                      `<i id="N">translated</i>`, ids intact. An unknown empty
-//                      tag — `<x id="N"></x>`, shipped until this was measured —
-//                      survives just as reliably and is inert, so every run is
-//                      translated as an isolated fragment (`extension` → 扩大, the
-//                      expansion of something) and the ids return in source
-//                      order. Perfect alignment over a dead translation.
+//   `<i id="N">text</i>` — Google translateHtml, which parses markup. The tag
+//                      must *carry* the run: an inert marker (an empty tag) has
+//                      its ids dropped for CJK source, and the response comes
+//                      back as one merged run.
 //
-//   `⟦N⟧`            — plain-text providers (Bing, OpenAI, Imp). A plain-text
-//                      endpoint passes the marker through; a model reinterprets
-//                      it. Both keep every marker, but only the model moves the
-//                      text, to the target language's word order.
+//   `⟦N⟧`            — plain-text providers (Bing, OpenAI, Imp): passed through,
+//                      or moved by the model.
 //
-// Reordering is therefore possible on every path. `splitTranslation` undoes it —
-// the pieces stay id-correct — but the page cannot express it, because the runs
-// are fixed slots. See `reordered`.
+// Reordering is therefore normal: `splitTranslation` returns pieces in the
+// provider's *output* order, the target language's reading order. Writing those
+// into document-order slots puts the sentence back together; what it cannot do
+// is hold an inline element to the words it started with. See lib/render.ts.
+//
+// Runs carrying no words — whitespace, punctuation, digits, `isPassthroughRun` —
+// are sent untagged and left untouched on the page: they need no translation,
+// and a tagged one makes Google nest the next tag inside it, losing its id.
 //
 // buildMarkedSource always emits the `⟦N⟧` canonical form, because that is what
 // `data-imp-text` tokens and the idb cache key are derived from; the Google wire
-// form is produced per request by toGoogleMarkupSource. Parsing accepts every
-// syntax so a response cached from one provider still reads after a switch (the
+// form is produced per request by toGoogleMarkupSource. Parsing accepts the
+// bracket form too, so a response cached from another provider still reads (the
 // cache key carries no provider).
 //
-// Markers can still be lost, and the fallback cuts at offsets unrelated to the
-// run boundaries — so callers must not write fallback pieces into a block whose
-// run boundaries are visible (links, inline styling). See lib/render.ts.
+// Markers can still be lost, and fallback pieces cut at offsets unrelated to the
+// run boundaries — so callers must not write them into a block whose boundaries
+// are visible (links, inline styling). See lib/render.ts.
 
 /**
- * Google wire marker for run id `n` (1-based).
+ * Runs sent as bare text instead of as a tagged segment: whitespace, brackets,
+ * digits and quotes need no translation, and tagging one is what makes Google
+ * emit the *next* tag nested inside it, losing that tag's id. Sent bare, the
+ * characters still reach the endpoint as a separator between the runs around
+ * them, and the node they came from is left untouched on the page.
  *
- * `<i>` because translateHtml treats a known inline tag as a reordering anchor,
- * and an inert marker costs a fragment translation of every run in the block.
- * Both forms survive the round trip with their ids; only one survives with its
- * meaning. The wire form is balanced so the endpoint receives well-formed markup
- * — it comes back wrapping the run, not empty.
+ * Both sides of the wire call this — `toGoogleMarkupSource` to decide what gets
+ * a tag, `splitTranslation` to work out which ids to expect back.
  */
-function googleRunMarker(n: number): string {
-  return `<i id="${n}"></i>`
+export function isPassthroughRun(text: string): boolean {
+  return /^[\s\[\]\d"'“”‘’]*$/.test(text)
 }
 
 /**
  * Marker-shaped tags, for sanitising run text: page text must not be able to
- * present itself as a run marker. Anti-forgery is the whole job here — not
- * whitespace stripping — and that is what bounds the pattern.
+ * present itself as a run marker. Anti-forgery is the whole job — not whitespace
+ * stripping — and that is what bounds the pattern.
  *
- * First branch: the legacy `<x id="N"></x>` empty pair, consumed as a unit. It
- * is a real marker, so removing it whole is the point; nothing else encloses
- * text, because the empty pair cannot carry any.
- *
- * Second branch: a bare or self-closing opener, which cannot forge anything on
- * its own — `ANY_MARK_RE` only ever matches a *complete* pair, so deleting the
- * opener is sufficient to stop page text passing as a marker. The text it would
- * have enclosed is page text, not part of any forgery, and must be kept. Same
- * reason bare closers are left alone: `</i>` is ordinary prose on documentation
- * and code sites, and deleting it would change what the page says — which is
- * also why single-run blocks skip sanitising altogether.
- *
- * No branch may span from an opener to an unrelated closer. `ANY_MARK_RE`
- * matching a pair does not license deleting the run text between one.
+ * First branch: the legacy `<x id="N"></x>` pair, consumed as a unit so a page
+ * carrying the literal does not lose half of it. Second: a bare or self-closing
+ * opener, which cannot forge anything alone — `ANY_MARK_RE` only matches a
+ * *complete* pair, so deleting the opener is enough, and the text it would have
+ * enclosed is page text to keep. Bare closers stay for the same reason (`</i>`
+ * is ordinary prose on documentation sites). No branch may span from an opener
+ * to an unrelated closer.
  */
 const MARK_TAG_RE = /<x id="\d+"><\/x>|<[xi] id="\d+"\s*\/?>/g
 
 /**
- * Wire tags *and* closers, for cleaning a response whose markers did not parse:
- * there the pairs are ours, and the closers would otherwise be written to the
- * page. Covers the `<x id>` era too, so a response cached before the wire-form
- * change still reads.
+ * Wire tags *and* closers: when markers did not parse the pairs are ours, and a
+ * closer left behind would be written to the page. Covers the `<x id>` era too.
  */
 const WIRE_RESIDUE_RE = /<[xi] id="\d+"\s*\/?>|<\/[xi]>/g
 
-const BRACKET_MARK_RE = /⟦(\d+)⟧/g
+/** Splits a canonical marked source into `[lead, id, text, id, text, …]`. */
+const BRACKET_SPLIT_RE = /⟦(\d+)⟧/
 /**
- * One pass over all three syntaxes, oldest first. The `<i>` branch captures its
- * inner text because translateHtml returns the run *wrapped* in the tag, while
- * the other two leave the run after an empty mark.
- *
- * Run text is escaped on the wire, so an `<i id="N">` inside a run can only be
- * another marker — hence the lookahead, which stops an unclosed tag from
- * swallowing the rest of the response as one run.
+ * One pass over both syntaxes: the Google wire tag and the `⟦N⟧` token. The
+ * `<i>` branch captures its inner text because translateHtml returns the run
+ * *wrapped* in the tag, while a bracket mark leaves the run after it. Run text is
+ * escaped on the wire, so an `<i id="N">` inside a run can only be another
+ * marker — hence the lookahead, which stops an unclosed tag from swallowing the
+ * rest of the response as one run.
  */
-const ANY_MARK_RE =
-  /<x id="(\d+)"><\/x>|<i id="(\d+)">((?:(?!<i id=")[\s\S])*?)<\/i>|⟦(\d+)⟧/g
+const ANY_MARK_RE = /<i id="(\d+)">((?:(?!<i id=")[\s\S])*?)<\/i>|⟦(\d+)⟧/g
 
 /**
  * Canonical marked source for a block whose visible text is split into
- * `runTexts` (document order). Single-run blocks skip the marker noise; empty
- * input yields an empty string.
+ * `runTexts` (document order). Empty input yields an empty string.
  *
- * Multi-run blocks strip marker brackets and wire-tag literals from run text so
+ * Multi-run blocks strip wire-tag literals and marker brackets from run text so
  * page text can't forge a marker — the `<i id>` form reappears in decoded text
  * after a Google round-trip, and a surviving literal would parse as a phantom
- * run id.
- *
- * Single-run blocks skip that strip: `splitTranslation` returns the response
- * verbatim for them and never parses a marker, so there is nothing to forge
- * against. Sanitizing there only destroys page text — `⟦a, b⟧` is how Wikipedia
- * writes a closed interval, and single-run paragraphs are the common case.
+ * run id. Single-run blocks skip both the markers and that strip: their response
+ * is returned verbatim, so there is nothing to forge against, and sanitising
+ * would only destroy page text — `⟦a, b⟧` is how Wikipedia writes a closed
+ * interval, and single-run paragraphs are the common case.
  */
 export function buildMarkedSource(runTexts: string[]): string {
   if (runTexts.length === 0) return ''
@@ -128,119 +111,136 @@ export function buildMarkedSource(runTexts: string[]): string {
  * A canonical marked source with every run marker removed, giving back the
  * block's visible text.
  *
- * The digits are part of the marker: stripping only `[⟦⟧]` leaves `1`/`2`/`3`
- * behind and the "plain" text no longer equals what the page shows.
+ * Only the canonical `⟦N⟧` form counts: the wire tag carries its run's
+ * translated text *inside* the tag, so matching that shape here would delete the
+ * very text this function exists to keep. Wire residue is a response-side
+ * problem, handled in `splitTranslation`'s fallback. The digits are part of the
+ * marker — stripping only `[⟦⟧]` would leave `1`/`2`/`3` behind and the result
+ * would no longer equal what the page shows.
  */
 export function stripMarkers(marked: string): string {
-  return marked.replace(ANY_MARK_RE, '')
+  return marked.replace(/⟦\d+⟧/g, '')
 }
 
 /**
- * Rewrites a canonical `⟦N⟧`-marked source into the Google wire format: markers
- * become raw empty tags, run text is escaped. Unmarked input (single-run
- * blocks, every bilingual string) is escaped wholesale, so callers that never
- * mark anything keep byte-identical output to a plain `escape(text)`.
+ * Rewrites a canonical `⟦N⟧`-marked source into the Google wire format: each run
+ * becomes `<i id="N">run text</i>`, except passthrough runs, which stay bare.
  *
- * `escape` is supplied by the caller to keep one HTML-escaping implementation
- * in the codebase.
+ * Unmarked input (single-run blocks, every bilingual string) is escaped
+ * wholesale, so callers that never mark anything keep byte-identical output to a
+ * plain `escape(text)`. Ids stay the canonical run numbers, and stay sparse when
+ * a run is passthrough — the endpoint returns them unchanged, so nothing
+ * downstream has to map a compacted index back to a run. `escape` is the
+ * caller's, to keep one HTML-escaping implementation in the codebase.
  */
 export function toGoogleMarkupSource(
   marked: string,
   escape: (s: string) => string,
 ): string {
-  let out = ''
-  let prev = 0
-  let saw = false
-  for (let m = BRACKET_MARK_RE.exec(marked); m; m = BRACKET_MARK_RE.exec(marked)) {
-    saw = true
-    // slice from prev to m.index, so text before the first marker is escaped
-    // as run text rather than dropped.
-    out += escape(marked.slice(prev, m.index)) + googleRunMarker(Number(m[1]))
-    prev = m.index + m[0].length
+  const parts = marked.split(BRACKET_SPLIT_RE)
+  if (parts.length === 1) return escape(marked)
+  let out = escape(parts[0]!)
+  for (let i = 1; i < parts.length; i += 2) {
+    const text = parts[i + 1] ?? ''
+    out += isPassthroughRun(text)
+      ? escape(text)
+      : `<i id="${parts[i]!}">${escape(text)}</i>`
   }
-  BRACKET_MARK_RE.lastIndex = 0
-  return saw ? out + escape(marked.slice(prev)) : escape(marked)
+  return out
 }
 
 export interface SplitResult {
-  /** One piece per run, in run order (`pieces[i]` ↔ `runTexts[i]`). */
+  /**
+   * One piece per run that gets written back, in the provider's output order:
+   * `pieces[k]` goes into the k-th written run in document order. Passthrough
+   * runs are absent, and empty when nothing is written.
+   */
   pieces: string[]
+  /**
+   * The response's own text with its markers removed, in the provider's output
+   * order and with nothing dropped — passthrough text included. This is what a
+   * caller showing one string for the whole block needs (bilingual).
+   */
+  plain: string
   /** True when marker-based alignment succeeded; false after fallback. */
   exact: boolean
-  /**
-   * True when the provider emitted run markers out of source order, so the
-   * target language wanted the runs somewhere else.
-   *
-   * The pieces are still id-correct — this is not a parsing failure. But a
-   * caller that writes them into fixed source-order slots cannot express the
-   * move, and would show scrambled text while reporting `exact: true`.
-   *
-   * Only the exact path can answer this: after fallback there are no
-   * trustworthy markers left, so there is no reordering to report and the
-   * arbitrary cut is governed by `exact` alone. See `swapTextNodes`.
-   */
-  reordered: boolean
 }
 
 /**
  * Splits a translated block string back into per-run pieces.
  *
- * Exact path: markers occur exactly once each for ids 1..N, in any order — a
- * reordered segment is re-mapped by id rather than by position. A piece is the
- * text between its marker and the next marker in appearance order; text between
- * a wrapped run's closing tag and the next marker stays with that run, and an
- * orphan prefix before the first marker joins the first-appearing marker's run.
+ * A response is complete when it carries, exactly once each, either the ids the
+ * wire form tagged — the Google path leaves passthrough runs untagged — or every
+ * run id, which is what the canonical `⟦N⟧` payload asks for on the plain-text
+ * and model paths. Anything else has lost or invented a marker: fallback, which
+ * cuts the marker-free text proportionally by the tagged runs' lengths.
  *
- * Fallback (`exact: false`): residual markers are stripped and the text is cut
- * proportionally by run codepoint length.
+ * Pieces come back in the provider's output order, one per run that will be
+ * written: each is the text between its own mark and the next mark in appearance
+ * order, so text pushed outside the tags stays with the piece it follows.
  */
 export function splitTranslation(translated: string, runTexts: string[]): SplitResult {
-  const n = runTexts.length
-  if (n === 0) return { pieces: [], exact: true, reordered: false }
-  if (n === 1) return { pieces: [translated], exact: true, reordered: false }
+  if (runTexts.length === 0) return { pieces: [], plain: translated, exact: true }
+  // A single run was sent unmarked, so its response is the block's text as-is —
+  // including a `⟦N⟧` the page itself wrote, which is why nothing is stripped.
+  if (runTexts.length === 1) return { pieces: [translated], plain: translated, exact: true }
 
-  const marks: { id: number; start: number; end: number; inner?: string }[] = []
+  const plain = translated.replace(/⟦\d+⟧/g, '').replace(WIRE_RESIDUE_RE, '')
+  const fullIds = runTexts.map((_, k) => k + 1)
+  const taggedIds = fullIds.filter((id) => !isPassthroughRun(runTexts[id - 1]!))
+
+  const marks: { id: number; start: number; end: number; inner: string }[] = []
   for (let m = ANY_MARK_RE.exec(translated); m; m = ANY_MARK_RE.exec(translated)) {
     marks.push({
-      id: Number(m[1] ?? m[2] ?? m[4]),
+      id: Number(m[1] ?? m[3]),
       start: m.index,
       end: m.index + m[0].length,
-      inner: m[3],
+      inner: m[2] ?? '',
     })
   }
   ANY_MARK_RE.lastIndex = 0
 
-  const ids = new Set(marks.map((m) => m.id))
-  const valid =
-    marks.length === n &&
-    ids.size === n &&
-    marks.every((m) => m.id >= 1 && m.id <= n)
+  const found = new Set(marks.map((m) => m.id))
+  const complete = (expected: number[]): boolean =>
+    marks.length === expected.length &&
+    found.size === expected.length &&
+    expected.every((id) => found.has(id))
 
-  if (valid) {
-    const pieces: string[] = Array.from({ length: n }, () => '')
-    marks.forEach((mark, k) => {
-      const nextStart = k + 1 < marks.length ? marks[k + 1]!.start : translated.length
+  const writable = (id: number): boolean => !isPassthroughRun(runTexts[id - 1]!)
+
+  if (complete(taggedIds) || complete(fullIds)) {
+    const ordered = marks.map((mark, k) => ({
+      id: mark.id,
       // A wrapped run's own text came back inside its tag; the rest is whatever
-      // sits between that tag and the next marker.
-      const trailing = translated.slice(mark.end, nextStart)
-      let piece = mark.inner === undefined ? trailing : mark.inner + trailing
-      if (k === 0) piece = translated.slice(0, mark.start) + piece
-      pieces[mark.id - 1] = piece
-    })
-    return { pieces, exact: true, reordered: marks.some((m, k) => m.id !== k + 1) }
+      // sits between that tag and the next mark.
+      text:
+        mark.inner +
+        translated.slice(mark.end, k + 1 < marks.length ? marks[k + 1]!.start : translated.length),
+    }))
+    // The mark the prefix sits in front of may belong to a passthrough run,
+    // whose piece is dropped — so the prefix goes to the first piece kept.
+    const first = ordered.findIndex((piece) => writable(piece.id))
+    if (first >= 0) {
+      ordered[first]!.text = translated.slice(0, marks[0]!.start) + ordered[first]!.text
+    }
+    return {
+      pieces: ordered.filter((piece) => writable(piece.id)).map((piece) => piece.text),
+      plain,
+      exact: true,
+    }
   }
 
-  const out = [...translated.replace(/⟦\d+⟧/g, '').replace(WIRE_RESIDUE_RE, '')]
-  const lens = runTexts.map((t) => [...t].length)
+  const out = [...plain]
+  const lens = taggedIds.map((id) => [...runTexts[id - 1]!].length)
   const total = lens.reduce((a, b) => a + b, 0)
   const pieces: string[] = []
   let cum = 0
   let prev = 0
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < lens.length; i++) {
     cum += lens[i]!
-    const boundary = i === n - 1 ? out.length : Math.round((cum / total) * out.length)
+    const boundary = i === lens.length - 1 ? out.length : Math.round((cum / total) * out.length)
     pieces.push(out.slice(prev, boundary).join(''))
     prev = boundary
   }
-  return { pieces, exact: false, reordered: false }
+  return { pieces, plain, exact: false }
 }

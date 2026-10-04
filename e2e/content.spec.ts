@@ -383,10 +383,11 @@ test('translation-only replaces text in place preserving links', async ({ contex
   )
 
   // The two body links are one extracted block with three runs
-  // ("Go to Page 2", "\n  ", "Open PDF"). The mock echoes the marked source
-  // with a "[翻译] " prefix, which must land in the first-appearing run's
-  // piece only — run 3 keeps its text verbatim, proving per-id alignment
-  // rather than a wholesale overwrite.
+  // ("Go to Page 2", "\n  ", "Open PDF"). The whitespace run carries no words,
+  // so it is not written and the block is dispatched in output order — the
+  // mock echoes the marked source behind a "[翻译] " prefix, which lands on the
+  // first link's text node only. The second link keeps its own text, which is
+  // what makes this a per-run write rather than a wholesale overwrite.
   await expect(page.locator('#link-page2')).toHaveText('[翻译] Go to Page 2', { timeout: 15000 })
   await expect(page.locator('#link-page2')).toHaveAttribute('href', '/page2')
   await expect(page.locator('#link-pdf')).toHaveText('Open PDF')
@@ -405,7 +406,7 @@ test('translation-only replaces text in place preserving links', async ({ contex
   await expect(page.locator('.imp-translate-br')).toHaveCount(0, { timeout: 5000 })
 })
 
-test('translation-only keeps the source when a model reorders the runs', async ({
+test('translation-only writes reordered runs in the model output order', async ({
   context,
   baseURL,
 }) => {
@@ -414,21 +415,22 @@ test('translation-only keeps the source when a model reorders the runs', async (
   await page.waitForLoadState('domcontentloaded')
 
   await configureMockProvider(page, baseURL)
-  // The two body links are one three-run block. The reply puts the runs in a
-  // different order *and* gives each the other link's text, which is what a
-  // model does when it cannot find a place for the original order — every
-  // marker survives, so alignment reports clean while the slots cannot hold it.
+  // The two body links are one three-run block; the whitespace between them
+  // carries no words, so it is neither sent nor written. The reply puts the two
+  // tagged runs in the order the model wanted, and the pieces land in the
+  // document-order slots in that order — the sentence reads right, and each
+  // link keeps its own href.
   await setMockReplies(page, baseURL, {
-    '⟦1⟧Go to Page 2⟦2⟧\n  ⟦3⟧Open PDF': '⟦3⟧第 2 页⟦1⟧PDF 文件⟦2⟧',
+    '⟦1⟧Go to Page 2⟦2⟧\n  ⟦3⟧Open PDF': '⟦3⟧第 2 页⟦1⟧PDF 文件',
   })
   await setSettings(context, { renderMode: 'translation-only' })
   await startTranslation(page)
 
   await expect(page.locator('.imp-translate-loading')).toHaveCount(0, { timeout: 15000 })
-  // Untranslated rather than swapped: /page2 must not say "PDF 文件".
-  await expect(page.locator('#link-page2')).toHaveText('Go to Page 2')
-  await expect(page.locator('#link-pdf')).toHaveText('Open PDF')
+  await expect(page.locator('#link-page2')).toHaveText('第 2 页')
+  await expect(page.locator('#link-pdf')).toHaveText('PDF 文件')
   await expect(page.locator('#link-page2')).toHaveAttribute('href', '/page2')
+  await expect(page.locator('#link-pdf')).toHaveAttribute('href', '/sample.pdf')
 
   await stopTranslation(page)
 })

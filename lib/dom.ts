@@ -518,7 +518,7 @@ export function extractBlocks(root: Element = document.body, opts?: ExtractOptio
           node,
         )
       }
-      blocks.push({ element: node as HTMLElement, text: buildMarkedSource(trimEdgeRuns(runs.map((r) => r.data))) })
+      blocks.push({ element: node as HTMLElement, text: buildMarkedSource(trimEdgeRuns(runs).texts) })
       return true
     }
     return false
@@ -552,7 +552,7 @@ export function extractBlocks(root: Element = document.body, opts?: ExtractOptio
     }
     const wrapper = parent.ownerDocument!.createElement('font')
     wrapper.setAttribute(WRAP_ATTR, 'true')
-    blocks.push({ element: wrapper, text: buildMarkedSource(trimEdgeRuns(runs.map((r) => r.data))) })
+    blocks.push({ element: wrapper, text: buildMarkedSource(trimEdgeRuns(runs).texts) })
     pendingWraps.push({ parent, wrapper, refNode: seg[0], seg })
   }
 
@@ -717,52 +717,59 @@ export function getTranslatableRuns(element: HTMLElement, skipSelectors?: string
 }
 
 // A block's canonical translation payload: its runs, marked. The single source
-// of the string that is cached, compared as data-imp-text, and sent to the
-// provider — so all three agree by construction rather than by three callers
-// remembering to agree.
-//
-// Leading/trailing whitespace is dropped here rather than by a `.trim()` on the
-// finished string, because trimming the marked form would be meaningless: the
-// markers are at the very edges, so `"  a"` and `"a"` would keep different keys.
-// Trimming the run list is what makes the pre-extraction value, the token
-// written after a translation-only swap, and the recheck recomputation all
-// equal. Edge runs that become empty are dropped with their whitespace, so
-// `<a>text</a>` followed by a whitespace-only tail does not become a second,
-// empty run.
+// of the string that is extracted as `data-imp-text`, cached, and re-checked
+// before a write-back, so all three agree by construction rather than by three
+// callers remembering to agree.
 export function buildBlockSource(element: HTMLElement, skipSelectors?: string[]): string {
-  return buildMarkedSource(blockRunTexts(element, skipSelectors))
+  return buildMarkedSource(trimmedRuns(element, skipSelectors).texts)
 }
 
-// The run texts of a block, with edge whitespace removed. Exported so the
-// renderers split a response against exactly the run list the request was
-// built from.
-export function blockRunTexts(element: HTMLElement, skipSelectors?: string[]): string[] {
-  return trimEdgeRuns(getTranslatableRuns(element, skipSelectors).map((r) => r.data))
+// A block's runs with edge whitespace removed, keeping which text node each
+// surviving run belongs to. The renderers split a response against exactly the
+// run list the request was built from, and translation-only writes the pieces
+// back into those same nodes — so both need the pairing, not just the strings.
+export interface TrimmedRuns {
+  /** Text nodes surviving edge trimming, document order. */
+  nodes: Text[]
+  /** Their texts with block-edge whitespace stripped — payload and split keys. */
+  texts: string[]
+  /** Whitespace stripped off the front of `nodes[0]`; re-attach on write-back. */
+  head: string
+  /** Whitespace stripped off the end of the last node; re-attach on write-back. */
+  tail: string
 }
 
-// Drop whitespace at both ends of the run list, and trim the outermost runs'
-// own text where that is where the whitespace sits.
+export function trimmedRuns(element: HTMLElement, skipSelectors?: string[]): TrimmedRuns {
+  return trimEdgeRuns(getTranslatableRuns(element, skipSelectors))
+}
+
+// Drop whitespace at both ends of the run list, trimming the outermost runs' own
+// text where that is where the whitespace sits. A `.trim()` on the marked string
+// would be a no-op — the markers sit at the very edges — so `"  a"` and `"a"`
+// would keep different cache keys for the same page text.
 //
-// A `.trim()` on the marked string instead would be a no-op at the edges, since
-// that is where the markers sit — `"  a"` and `"a"` would keep different cache
-// keys for the same page text. Two cases the naive version misses: a
-// whitespace-only edge run (`<p>text <span translate="no">x</span></p>` leaves
-// a trailing `" "` run), and indentation inside the first/last run, which is
-// how `<a>` wrapped in newlines in a template literal reads.
+// Two cases a naive edge filter misses: a whitespace-only edge run
+// (`<p>text <span translate="no">x</span></p>` leaves a trailing `" "` run) and
+// indentation inside the first/last run — how `<a>` wrapped in newlines in a
+// template literal reads.
 //
-// Only the edges move: interior runs keep their whitespace, because it is the
-// separation between segments and translation-only writes the runs back
-// individually — trimming it would reflow the page.
-function trimEdgeRuns(runs: string[]): string[] {
+// Only the edges move: interior whitespace separates segments, and
+// translation-only writes runs back individually, so trimming it would reflow
+// the page. A single surviving run is both first and last, so `head` comes off
+// the original text before `trimStart`, and `tail` off what is left after it.
+function trimEdgeRuns(runs: Text[]): TrimmedRuns {
   let start = 0
   let end = runs.length
-  while (start < end && !runs[start]!.trim()) start++
-  while (end > start && !runs[end - 1]!.trim()) end--
-  const out = runs.slice(start, end)
-  if (out.length === 0) return out
-  out[0] = out[0]!.trimStart()
-  out[out.length - 1] = out[out.length - 1]!.trimEnd()
-  return out
+  while (start < end && !runs[start]!.data.trim()) start++
+  while (end > start && !runs[end - 1]!.data.trim()) end--
+  const nodes = runs.slice(start, end)
+  if (nodes.length === 0) return { nodes, texts: [], head: '', tail: '' }
+  const texts = nodes.map((n) => n.data)
+  const head = texts[0]!.slice(0, texts[0]!.length - texts[0]!.trimStart().length)
+  texts[0] = texts[0]!.trimStart()
+  const tail = texts[texts.length - 1]!.slice(texts[texts.length - 1]!.trimEnd().length)
+  texts[texts.length - 1] = texts[texts.length - 1]!.trimEnd()
+  return { nodes, texts, head, tail }
 }
 
 // Original text of runs written by swapTextNodes. Keyed per node so repeated
