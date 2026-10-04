@@ -711,6 +711,36 @@ describe('translation-only rendering', () => {
     expect(p.textContent).toBe('点击这里立刻')
   })
 
+  it('keeps the source when the runs come back in target word order', () => {
+    // Ids in 1,5,6,2,3,4,7 — every mark present, so this reports a clean
+    // alignment, and the pieces are id-correct. But the runs are fixed slots in
+    // source order, so writing them yields "Translaneurは、拡張機能です。外国語".
+    // Untranslated beats scrambled, and the token stays as seeded so recheck
+    // sees an unchanged block.
+    const { p, blocks } = runsFixture()
+    p.setAttribute('data-imp-text', blocks[0]!.text)
+    replaceWithTranslation(
+      blocks,
+      ['⟦1⟧Translaneurは、⟦5⟧拡張機能⟦6⟧です。⟦2⟧外国語⟦3⟧のページ⟦4⟧を読むための'],
+      { renderMode: 'translation-only' },
+    )
+    expect(p.textContent).toBe('Click here now')
+    expect(p.querySelector('a')!.getAttribute('href')).toBe('/x')
+    expect(p.getAttribute('data-imp-text')).toBe(blocks[0]!.text)
+  })
+
+  it('keeps the source when a comment-separated block comes back reordered', () => {
+    // No descendant element, so the alignment-failure guard above does not
+    // apply — but the slots are still fixed and the word order still moved.
+    document.body.innerHTML = '<p>abc<!-- split -->def</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const blocks = [{ element: p, text: buildMarkedSource(['abc', 'def'])}] as TranslatableBlock[]
+    p.setAttribute('data-imp-text', blocks[0]!.text)
+    replaceWithTranslation(blocks, ['⟦2⟧乙⟦1⟧甲'], { renderMode: 'translation-only' })
+    expect(p.textContent).toBe('abcdef')
+    expect(p.getAttribute('data-imp-text')).toBe(blocks[0]!.text)
+  })
+
   it('skips stale blocks whose DOM changed under the request', () => {
     const { p, blocks } = runsFixture()
     ;(p.firstChild as Text).data = 'Moved '

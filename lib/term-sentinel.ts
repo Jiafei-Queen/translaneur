@@ -43,7 +43,8 @@
  * suffix. Chosen so that:
  *  - the provider has no reason to treat it as a word and translate it,
  *  - it survives Google's HTML round-trip as text (measured, unlike the tags),
- *  - and it cannot collide with run markers, which are `⟦N⟧` or `<x id="N">`.
+ *  - and it cannot collide with run markers, which are `⟦N⟧`, `<x id="N">` or
+ *    the Google wire form `<i id="N">`.
  */
 const SENTINEL_PREFIX = 'ZQX'
 const SENTINEL_SUFFIX = 'QXZ'

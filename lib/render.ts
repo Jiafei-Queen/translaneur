@@ -375,13 +375,24 @@ export function replaceWithTranslation(
         continue
       }
       clearInjectedWrappers(element)
-      const { pieces, exact } = splitTranslation(translated, runs.map((r) => r.data))
+      const { pieces, exact, reordered } = splitTranslation(translated, runs.map((r) => r.data))
+      // Two different guards, for two different harms:
+      //
       // Fallback cuts at offsets unrelated to the run boundaries, so a block
       // with any descendant element (link, inline styling) would get a link's
-      // own text split in half. Keep the source silently instead: a missing
-      // translation beats a clickable link leading somewhere meaningless.
-      // Leaving the token untouched also keeps recheck from retrying forever.
+      // own text split in half. A missing translation beats a clickable link
+      // leading somewhere meaningless.
       if (!exact && element.querySelector('*') !== null) continue
+      //
+      // Reordered means the provider moved the runs to the target language's
+      // word order. The pieces are id-correct, but the runs below sit in fixed
+      // source-order slots — there is nowhere to put the move, so writing them
+      // scrambles the sentence while reporting a clean alignment. This bites
+      // comment-separated runs too, which have no descendant element, which is
+      // why it does not share the condition above.
+      //
+      // Leaving the token untouched keeps recheck from retrying forever.
+      if (reordered) continue
       swapTextNodes(runs, pieces)
       // Token must equal what currentBlockSource computes now that the runs
       // hold the translated text — keeps flushRecheck self-consistent.

@@ -8,7 +8,7 @@
 //
 // Scope: the OpenAI path only. Google translateHtml and Bing ttranslatev3 take
 // no prompt at all, and protecting terms on those endpoints would need the
-// `<x id>` marker machinery documented in docs/translation-only-alignment.md —
+// `<i id>` marker machinery documented in docs/translation-only-alignment.md —
 // where real-prose marker survival was measured at 2/21. Imp Credits is a
 // server-side black box. A field that appears for those providers but cannot
 // act would be a lie, so the options page gates it on the provider.

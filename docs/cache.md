@@ -14,8 +14,8 @@ Maintainer-facing. For what the user sees, see the Features section of
 
 Three parts.
 
-- **`PROMPT_REVISION`** — a constant in `lib/cache.ts`, currently `1`. Retires
-  every entry written under an earlier prompt. See
+- **`PROMPT_REVISION`** — a constant in `lib/cache.ts`, currently `2`. Retires
+  every entry written under an earlier prompt or wire form. See
   [Prompt revision](#prompt-revision).
 - **`targetLang`** — the only settings-derived input. Switching the target
   language is a cache miss, by design.
@@ -97,8 +97,12 @@ It is deliberately **not** a hash of the rendered prompt. That would re-bill a
 page every time the user touched a setting, which is the trade
 [above](#deliberately-not-in-the-key) exists to avoid.
 
-Bump it when a change to `prompt.md`, `renderSystemPrompt`, or the request shape
-would change how a block ought to come back.
+Bump it when a change to `prompt.md`, `renderSystemPrompt`, the request shape,
+or the marker wire form would change how a block ought to come back. The cache
+stores the provider's raw response, so a new wire form makes every entry
+written under the old one wrong — not merely stale. That is what revision 2
+retired: entries written under the `<x id>` markers carry fragment
+translations, not the wrapped runs the current form produces.
 
 ## Re-translating
 

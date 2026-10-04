@@ -949,14 +949,17 @@ describe('Google translateHtml marker passthrough', () => {
   })
 
   it('sends run markers as raw markup and escapes only run text', async () => {
-    const fetchMock = mockGoogleResponse(['<x id="1"></x>甲<x id="2"></x>乙'])
+    // The endpoint answers a known inline tag by wrapping the run in it, ids
+    // intact but possibly relocated — see docs/marker-behaviour.md.
+    const fetchMock = mockGoogleResponse(['<i id="1">甲</i><i id="2">乙</i>'])
     const { translate } = await import('./translator')
 
-    await translate(['⟦1⟧a <b>⟦2⟧b'], 'zh', googleSettings)
+    const result = await translate(['⟦1⟧a <b>⟦2⟧b'], 'zh', googleSettings)
 
     expect(sentTexts(fetchMock)).toEqual([
-      '<x id="1"></x>a &lt;b&gt;<x id="2"></x>b',
+      '<i id="1"></i>a &lt;b&gt;<i id="2"></i>b',
     ])
+    expect(result.texts).toEqual(['<i id="1">甲</i><i id="2">乙</i>'])
   })
 
   it('escapes unmarked bilingual text exactly as before', async () => {
@@ -986,7 +989,7 @@ describe('Google translateHtml marker passthrough', () => {
     )
 
     expect(sentTexts(fetchMock)).toEqual([
-      '<x id="1"></x>the <x id="2"></x>free<x id="3"></x> encyclopedia that <x id="4"></x>anyone<x id="5"></x> can edit.',
+      '<i id="1"></i>the <i id="2"></i>free<i id="3"></i> encyclopedia that <i id="4"></i>anyone<i id="5"></i> can edit.',
     ])
     const runs = ['the ', 'free', ' encyclopedia that ', 'anyone', ' can edit.']
     const split = splitTranslation(result.texts[0]!, runs)

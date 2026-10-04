@@ -4,6 +4,7 @@ import {
   stopTranslation,
   configureMockProvider,
   setSettings,
+  setMockReplies,
 } from './helpers'
 
 test('content script translates page', async ({ context, baseURL }) => {
@@ -402,4 +403,32 @@ test('translation-only replaces text in place preserving links', async ({ contex
   await expect(page.locator('.imp-translate-result')).toHaveCount(0, { timeout: 5000 })
   await expect(page.locator('.imp-translate-spacer')).toHaveCount(0, { timeout: 5000 })
   await expect(page.locator('.imp-translate-br')).toHaveCount(0, { timeout: 5000 })
+})
+
+test('translation-only keeps the source when a model reorders the runs', async ({
+  context,
+  baseURL,
+}) => {
+  const page = await context.newPage()
+  await page.goto(baseURL)
+  await page.waitForLoadState('domcontentloaded')
+
+  await configureMockProvider(page, baseURL)
+  // The two body links are one three-run block. The reply puts the runs in a
+  // different order *and* gives each the other link's text, which is what a
+  // model does when it cannot find a place for the original order — every
+  // marker survives, so alignment reports clean while the slots cannot hold it.
+  await setMockReplies(page, baseURL, {
+    '⟦1⟧Go to Page 2⟦2⟧\n  ⟦3⟧Open PDF': '⟦3⟧第 2 页⟦1⟧PDF 文件⟦2⟧',
+  })
+  await setSettings(context, { renderMode: 'translation-only' })
+  await startTranslation(page)
+
+  await expect(page.locator('.imp-translate-loading')).toHaveCount(0, { timeout: 15000 })
+  // Untranslated rather than swapped: /page2 must not say "PDF 文件".
+  await expect(page.locator('#link-page2')).toHaveText('Go to Page 2')
+  await expect(page.locator('#link-pdf')).toHaveText('Open PDF')
+  await expect(page.locator('#link-page2')).toHaveAttribute('href', '/page2')
+
+  await stopTranslation(page)
 })

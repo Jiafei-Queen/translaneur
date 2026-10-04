@@ -41,10 +41,12 @@ function getDB() {
  * this retires them in one step: no migration, no delete, and the orphaned rows
  * age out on the existing MAX_AGE/MAX_ENTENTS schedule.
  *
- * Bump it when a change to `prompt.md`, `renderSystemPrompt`, or the request
- * shape would change how a block ought to come back.
+ * Bump it when a change to `prompt.md`, `renderSystemPrompt`, the request
+ * shape, or the marker wire form would change how a block ought to come back.
+ * The cache stores the provider's raw response, so a new wire form makes every
+ * entry written under the old one wrong — not merely stale.
  */
-const PROMPT_REVISION = 1
+const PROMPT_REVISION = 2
 
 function cacheKey(text: string, targetLang: string): string {
   return `${PROMPT_REVISION}:${targetLang}:${text}`
