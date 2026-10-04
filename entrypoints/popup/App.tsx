@@ -10,7 +10,8 @@ import { messager } from '@/lib/message'
 import { getSettings, saveSettings, type RenderMode } from '@/lib/storage'
 import { LANGUAGES_SORTED } from '@/lib/languages'
 import { isPdfUrl } from '@/lib/utils'
-import { LanguagesIcon, SettingsIcon } from 'lucide-react'
+import { SettingsIcon } from 'lucide-react'
+import { BrandIcon } from '@/components/ui/brand-icon'
 
 type TabMeta = { id: number; isPdf: boolean }
 
@@ -128,7 +129,7 @@ export function App() {
     <div className="min-w-72 p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h1 className="text-base font-semibold flex items-center gap-1.5">
-          <LanguagesIcon className="w-4 h-4" />
+          <BrandIcon className="w-5 h-5" />
           Translaneur
         </h1>
         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={openOptions}>
