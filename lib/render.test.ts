@@ -811,6 +811,20 @@ describe('translation-only rendering', () => {
     expect(p.textContent).toContain('Click here now')
   })
 
+  it('clears the ring when the runs come back reordered', () => {
+    // The reordered skip is a second, independent early-return. `clearInjectedWrappers`
+    // runs before it, so no ring is stranded; nothing currently pins that ordering.
+    const { p, blocks } = runsFixture()
+    p.setAttribute('data-imp-text', blocks[0]!.text)
+    injectLoading(blocks)
+    expect(p.querySelector('.imp-translate-loading')).not.toBeNull()
+
+    replaceWithTranslation(blocks, ['⟦1⟧甲⟦3⟧丙⟦2⟧乙'], { renderMode: 'translation-only' })
+    expect(p.querySelector('.imp-translate-loading')).toBeNull()
+    expect(p.textContent).toBe('Click here now')
+    expect(p.getAttribute('data-imp-text')).toBe(blocks[0]!.text)
+  })
+
   it('leaves the block exactly as it was when translations are cleared', () => {
     // Stopping mid-flight removes the ring and its spacer; nothing may survive
     // as stray page text.

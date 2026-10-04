@@ -33,6 +33,21 @@ describe('buildMarkedSource', () => {
     expect(buildMarkedSource(['<i id="1">keep', '</i>more'])).toBe('⟦1⟧keep⟦2⟧</i>more')
   })
 
+  it('does not delete page text between a marker-shaped opener and a later closer', () => {
+    // A doc page quoting HTML: the opener and the ordinary `</i>` are in the
+    // SAME run, so a lazy span between them can reach across. The text inside
+    // the tag is page text, not a forged marker — it must survive.
+    expect(buildMarkedSource(['<i id="4">getElementById</i> returns a node', 'x'])).toBe(
+      '⟦1⟧getElementById</i> returns a node⟦2⟧x',
+    )
+  })
+
+  it('keeps every quoted tag body when a run holds more than one', () => {
+    expect(
+      buildMarkedSource(['Example: <i id="7">bold</i> and <i id="8">italic</i> ok.', 'x']),
+    ).toBe('⟦1⟧Example: bold</i> and italic</i> ok.⟦2⟧x')
+  })
+
   // A single-run block is never split (splitTranslation returns the response
   // verbatim at n === 1), so its text cannot forge a marker — nothing parses it.
   // Sanitizing there only destroys page text, and `⟦a, b⟧` is how Wikipedia
@@ -261,6 +276,15 @@ describe('splitTranslation', () => {
     ])
     expect(out.exact).toBe(true)
     expect(out.reordered).toBe(true)
+  })
+
+  it('does not let an unterminated inline tag swallow the rest of the response', () => {
+    // The lookahead in ANY_MARK_RE exists for exactly this. Today the input finds
+    // zero complete marks and takes the proportional fallback; without the
+    // lookahead it would parse as one run carrying the whole remaining response.
+    const out = splitTranslation('<i id="1">alpha beta gamma', ['a', 'b', 'c'])
+    expect(out.exact).toBe(false)
+    expect(out.pieces.join('')).toBe('alpha beta gamma')
   })
 
   it('keeps a literal closing tag that belongs to the page text', () => {

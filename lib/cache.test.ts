@@ -72,4 +72,21 @@ describe('cache', () => {
 
     expect(await getCached('hello', 'zh')).toBeUndefined()
   })
+
+  // The previous revision's key is hard-coded rather than derived from the
+  // constant: this must fail the day the wire form changes again and nobody
+  // bumps the revision, which is when every cached entry starts serving the
+  // previous wire form's translation for 30 days. The stored value is the
+  // `扩大` fragment translation the `<x id>` era produced — wrong, not stale.
+  it('should not read entries written under the previous wire form', async () => {
+    const db = await openDB('imp-translate', 1)
+    await db.put('translations', {
+      key: '1:zh:hello',
+      text: '<x id="1"></x>扩大',
+      ts: Date.now(),
+    })
+    db.close()
+
+    expect(await getCached('hello', 'zh')).toBeUndefined()
+  })
 })

@@ -186,4 +186,7 @@ it. Checked the same way — with the read no longer skipped, all three fail.
 
 `lib/cache.test.ts` pins the revision directly: an entry written in the
 pre-revision `${lang}:${text}` shape is unreachable, so a shipped prompt change
-cannot be masked by a stale hit.
+cannot be masked by a stale hit. A second case hard-codes the *immediately*
+previous revision's key, so leaving the constant alone when the wire form
+changes again fails that test rather than serving the previous form's
+translation for 30 days.
