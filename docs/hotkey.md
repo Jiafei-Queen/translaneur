@@ -19,7 +19,7 @@ first install or when the extension is reloaded.
 
 ## Changing it
 
-Open the options page and scroll to **Toggle Shortcut**.
+Open the options page, stay on **General**, and scroll to **Toggle Shortcut**.
 
 Recording is only available on browsers that can apply the result, which today
 means Firefox. On Chrome the field is read-only — see

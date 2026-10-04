@@ -12,6 +12,15 @@ import { LANGUAGES_SORTED } from '@/lib/languages'
 import { isPdfUrl } from '@/lib/utils'
 import { SettingsIcon } from 'lucide-react'
 import { BrandIcon } from '@/components/ui/brand-icon'
+import {
+  SegmentedControl,
+  type SegmentedOption,
+} from '@/components/ui/segmented'
+
+const DISPLAY_OPTIONS: readonly SegmentedOption<RenderMode>[] = [
+  { value: 'bilingual', label: 'Bilingual', title: 'original + translation' },
+  { value: 'translation-only', label: 'Translation only' },
+]
 
 type TabMeta = { id: number; isPdf: boolean }
 
@@ -155,50 +164,15 @@ export function App() {
 
       <div className="space-y-2">
         <label className="text-sm text-muted-foreground">Display</label>
-        <div
+        <SegmentedControl
           id="imp-display"
-          role="radiogroup"
-          aria-label="Display"
-          className="grid grid-cols-2 gap-1 rounded-md border border-input bg-muted p-1"
-        >
-          {(
-            [
-              ['bilingual', 'Bilingual', 'original + translation'],
-              ['translation-only', 'Translation only', ''],
-            ] as const
-          ).map(([value, label, title]) => {
-            const active = settings.renderMode === value
-            return (
-              <Button
-                key={value}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                title={title || undefined}
-                data-value={value}
-                variant="ghost"
-                size="sm"
-                // --secondary, --muted and --accent are all oklch(0.97 0 0),
-                // so the active half needs its own surface to read as
-                // selected, and the unselected half needs a tint that differs
-                // from the track. Hover comes from the seg-hover-* utilities,
-                // which are !important to outrank the ghost variant's own
-                // same-specificity hover utilities — see style.css. They
-                // replace a `hover:bg-background!` suffix, which Tailwind v4's
-                // scanner silently ignores, compiling to no rule at all.
-                className={
-                  active
-                    ? 'h-7 border border-input bg-background px-1 text-xs font-semibold shadow-xs seg-hover-off-selected'
-                    : 'h-7 px-1 text-xs seg-hover-off'
-                }
-                onClick={() => renderModeChangeMutation.mutate(value)}
-                disabled={renderModeChangeMutation.isPending}
-              >
-                {label}
-              </Button>
-            )
-          })}
-        </div>
+          ariaLabel="Display"
+          size="compact"
+          value={settings.renderMode}
+          onChange={(v) => renderModeChangeMutation.mutate(v)}
+          options={DISPLAY_OPTIONS}
+          disabled={renderModeChangeMutation.isPending}
+        />
       </div>
 
       {tabMeta.isPdf ? (

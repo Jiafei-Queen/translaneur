@@ -13,6 +13,11 @@ function createHarness(opts?: {
   maxBatchSize?: number
   maxBatchChars?: number
   translator?: (texts: string[], lang: string) => Promise<string[]>
+  getLimits?: () => {
+    batchWindowMs: number
+    maxBatchSize: number
+    maxBatchChars?: number
+  }
 }): Harness {
   const cache = new Map<string, string>()
   const setCached = vi.fn(async (text: string, lang: string, translated: string) => {
@@ -25,9 +30,13 @@ function createHarness(opts?: {
     getCached: async (text, lang) => cache.get(`${lang}::${text}`),
     setCached,
     translator,
-    batchWindowMs: opts?.batchWindowMs ?? 50,
-    maxBatchSize: opts?.maxBatchSize ?? 10,
-    maxBatchChars: opts?.maxBatchChars,
+    getLimits:
+      opts?.getLimits ??
+      (() => ({
+        batchWindowMs: opts?.batchWindowMs ?? 50,
+        maxBatchSize: opts?.maxBatchSize ?? 10,
+        maxBatchChars: opts?.maxBatchChars,
+      })),
   })
   return { cache, translator, setCached, service }
 }
@@ -280,5 +289,34 @@ describe('translate-service', () => {
     expect(h.translator).toHaveBeenCalledTimes(2)
     expect(h.translator).toHaveBeenNthCalledWith(1, ['first'], 'en')
     expect(h.translator).toHaveBeenNthCalledWith(2, ['second'], 'en')
+  })
+
+  it('picks up a changed maxBatchSize without recreating the service', async () => {
+    // The background memoises one service per provider, so limits captured at
+    // construction would ignore a change saved on the options page. The batch
+    // window is far longer than this test, so only a live read can flush.
+    let maxBatchSize = 100
+    const h = createHarness({
+      getLimits: () => ({ batchWindowMs: 10_000, maxBatchSize }),
+    })
+
+    const p1 = h.service.translate('a', 'en')
+    const p2 = h.service.translate('b', 'en')
+    // translate() awaits the cache lookup before enqueuing, so let the first
+    // two land under the old limit before lowering it.
+    await vi.advanceTimersByTimeAsync(0)
+    maxBatchSize = 2
+    const p3 = h.service.translate('c', 'en')
+
+    await vi.advanceTimersByTimeAsync(0)
+    expect(h.translator).toHaveBeenCalledOnce()
+    expect(h.translator).toHaveBeenCalledWith(['a', 'b', 'c'], 'en')
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    await expect(Promise.all([p1, p2, p3])).resolves.toEqual([
+      '[a]',
+      '[b]',
+      '[c]',
+    ])
   })
 })

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import {
   getSettings,
   saveSettings,
+  type RenderMode,
   type Settings,
   type TranslationProvider,
 } from '@/lib/storage'
@@ -10,6 +11,14 @@ import { messager } from '@/lib/message'
 import { IMP_CONNECT_URL } from '@/lib/imp'
 import { formatHotkey, hotkeyFromEvent } from '@/lib/hotkey'
 import { browser } from 'wxt/browser'
+import {
+  parseExtraBodyParams,
+  parseNonNegativeInt,
+} from '@/lib/openai-params'
+import {
+  SegmentedControl,
+  type SegmentedOption,
+} from '@/components/ui/segmented'
 import { LANGUAGES_SORTED } from '@/lib/languages'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -67,8 +76,23 @@ const PROVIDERS: {
   },
 ]
 
+const DISPLAY_OPTIONS: readonly SegmentedOption<RenderMode>[] = [
+  { value: 'bilingual', label: 'Bilingual', title: 'original + translation' },
+  { value: 'translation-only', label: 'Translation only' },
+]
+
+type SettingsSection = 'general' | 'provider'
+
+const SECTION_OPTIONS: readonly SegmentedOption<SettingsSection>[] = [
+  { value: 'general', label: 'General' },
+  { value: 'provider', label: 'Provider' },
+]
+
 export function App() {
   const [settings, setSettings] = useState<Settings | null>(null)
+  const [section, setSection] = useState<SettingsSection>('general')
+  // null means "show what is stored"; a string means the user is mid-edit.
+  const [extraBodyDraft, setExtraBodyDraft] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{
     ok: boolean
@@ -241,6 +265,10 @@ export function App() {
 
   if (!settings) return null
 
+  const extraBodyText =
+    extraBodyDraft ?? JSON.stringify(settings.openai.extraBody, null, 2)
+  const extraBodyStatus = parseExtraBodyParams(extraBodyText)
+
   function update(patch: Partial<Settings>) {
     setSettings({ ...settings!, ...patch })
     saveSettings(patch)
@@ -251,6 +279,14 @@ export function App() {
     setSettings({ ...settings!, openai })
     saveSettings({ openai })
     setTestResult(null)
+  }
+
+  function commitExtraBody(text: string) {
+    setExtraBodyDraft(text)
+    const parsed = parseExtraBodyParams(text)
+    // While the draft is unparseable the stored value keeps its last good
+    // state, so a half-typed object never reaches the request path.
+    if (parsed.ok) updateOpenAI({ extraBody: parsed.value })
   }
 
   async function testOpenAIConnection() {
@@ -280,422 +316,498 @@ export function App() {
         </div>
       </div>
 
-      <section className="space-y-4">
-        <div className="space-y-1.5">
-          <Label>Target Language</Label>
-          <Select
-            value={settings.targetLang}
-            onValueChange={(v) => update({ targetLang: v })}
-          >
-            <SelectTrigger className="w-full" id="imp-lang">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper" className="max-h-60">
-              {LANGUAGES_SORTED.map(([code, name]) => (
-                <SelectItem key={code} value={code}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+      <SegmentedControl
+        ariaLabel="Settings section"
+        value={section}
+        onChange={setSection}
+        options={SECTION_OPTIONS}
+      />
 
-        <div className="space-y-1.5">
-          <Label>Display</Label>
-          <div
-            id="imp-display"
-            role="radiogroup"
-            aria-label="Display"
-            className="grid grid-cols-2 gap-1 rounded-md border border-input bg-muted p-1"
-          >
-            {(
-              [
-                ['bilingual', 'Bilingual', 'original + translation'],
-                ['translation-only', 'Translation only', ''],
-              ] as const
-            ).map(([value, label, title]) => {
-              const active = settings.renderMode === value
-              return (
-                <Button
-                  key={value}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  title={title || undefined}
-                  data-value={value}
-                  variant="ghost"
-                  size="sm"
-                  // --secondary, --muted and --accent are all oklch(0.97 0 0),
-                  // so the active half needs its own surface to read as
-                  // selected, and the unselected half needs a tint that differs
-                  // from the track.
-                  //
-                  // Hover comes from the seg-hover-* utilities, which are
-                  // !important to outrank the ghost variant's own
-                  // same-specificity hover utilities — see style.css.
-                  className={
-                    active
-                      ? 'h-8 border border-input bg-background px-2 font-semibold shadow-xs seg-hover-off-selected'
-                      : 'h-8 px-2 seg-hover-off'
-                  }
-                  onClick={() => update({ renderMode: value })}
-                >
-                  {label}
-                </Button>
-              )
-            })}
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label>Translation Provider</Label>
-          <RadioGroup
-            value={settings.provider}
-            onValueChange={(v) =>
-              update({ provider: v as TranslationProvider })
-            }
-          >
-            {PROVIDERS.map((p) => (
-              <label
-                key={p.value}
-                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                  settings.provider === p.value
-                    ? 'border-primary bg-primary/5'
-                    : 'border-border hover:border-primary/50'
-                }`}
-              >
-                <RadioGroupItem value={p.value} className="mt-0.5" />
-                <div>
-                  <div className="text-sm font-medium">{p.label}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {p.description}
-                  </div>
-                </div>
-              </label>
-            ))}
-          </RadioGroup>
-        </div>
-      </section>
-
-      <section className="space-y-4">
-        <div>
-          <h2 className="font-semibold">Toggle Shortcut</h2>
-          <p className="text-sm text-muted-foreground">
-            Keyboard shortcut that translates or restores the current page.
-          </p>
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <Button
-              id="hotkey"
-              variant="outline"
-              size="sm"
-              className="font-mono"
-              aria-label="Toggle shortcut"
-              disabled={hotkeyCapability !== 'apply'}
-              // A disabled button swallows hover, so the reason it is
-              // disabled has to live in the title as well as the note below.
-              title={
-                hotkeyReadOnly
-                  ? 'Chrome does not let extensions assign shortcuts'
-                  : undefined
-              }
-              onClick={() => {
-                setRecordingHint(null)
-                setRecording(true)
-              }}
-            >
-              {recording
-                ? 'Press keys…'
-                : hotkeyReadOnly
-                  ? // What the browser will really fire, and nothing else.
-                    // Falling back to settings.hotkey re-creates the "saved
-                    // but never applied" lie: getSettings() merges
-                    // DEFAULT_SETTINGS.hotkey, so a stored value can exist
-                    // with no binding behind it.
-                    hotkeyState?.active
-                    ? formatHotkey(hotkeyState.active)
-                    : 'Not set'
-                  : settings.hotkey
-                    ? formatHotkey(settings.hotkey)
-                    : 'Not set'}
-            </Button>
-            {settings.hotkey !== '' && !recording && !hotkeyReadOnly && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => commitHotkey('')}
-              >
-                Clear
-              </Button>
-            )}
-          </div>
-          {hotkeyCapability === 'apply' && (
-            <p className="text-xs text-muted-foreground">
-              Click the button, then press a combination. Backspace clears it,
-              Escape cancels.
-            </p>
-          )}
-          {recording && recordingHint && (
-            <p className="text-xs text-destructive">{recordingHint}</p>
-          )}
-          {hotkeyCapability === 'apply' &&
-            (hotkeyState?.active ? (
-              <p className="text-xs text-muted-foreground">
-                Currently active: {formatHotkey(hotkeyState.active)}
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Not active in the browser.
-              </p>
-            ))}
-          {hotkeyCapability === 'error' && (
-            <p className="text-xs text-muted-foreground">
-              Could not read the browser's shortcut settings, so the field
-              above is read-only here. Reload to try again.
-            </p>
-          )}
-          {hotkeyReadOnly && (
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">
-                Chrome does not let extensions assign shortcuts. The field above
-                is read-only here, so finish the binding in the browser's
-                shortcut settings.
-              </p>
-              <Button
-                variant="link"
-                size="sm"
-                className="h-auto p-0"
-                onClick={() => {
-                  // Chrome blocks navigation to some chrome:// URLs; failing
-                  // quietly beats an unhandled rejection in the console.
-                  void browser.tabs
-                    .create({ url: 'chrome://extensions/shortcuts' })
-                    .catch(() => {})
-                }}
-              >
-                Open browser shortcut settings
-              </Button>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {settings.provider === 'imp' && (
-        <section className="space-y-4">
-          <div>
-            <h2 className="font-semibold">Imp Credits</h2>
-            <p className="text-sm text-muted-foreground">
-              Hosted, metered translation. Connect an Imp account to use it
-              without your own API key.
-            </p>
-          </div>
-
-          {impConnected ? (
-            <div className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 items-center gap-2 text-sm">
-                <span
-                  className={`size-2 shrink-0 rounded-full ${
-                    connStatus === 'connected'
-                      ? 'bg-green-500'
-                      : connStatus === 'checking'
-                        ? 'bg-muted animate-pulse'
-                        : 'bg-red-500'
-                  }`}
-                />
-                <span className="truncate">
-                  {connStatus === 'connected'
-                    ? `Connected · ${settings.imp?.model ?? 'imp-standard'}`
-                    : connStatus === 'checking'
-                      ? 'Checking connection…'
-                      : 'Connection lost — reconnect'}
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={disconnectImp}>
-                  Use another provider
-                </Button>
-                <Button variant="secondary" size="sm" onClick={connectImp}>
-                  Reconnect
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <Button className="w-full" onClick={connectImp}>
-              Connect Imp Account
-            </Button>
-          )}
-        </section>
-      )}
-
-      {settings.provider === 'openai' && (
-        <section className="space-y-4">
-          <div>
-            <h2 className="font-semibold">OpenAI Compatible API</h2>
-            <p className="text-sm text-muted-foreground">
-              Works with OpenAI, DeepSeek, Gemini, and any other
-              OpenAI-compatible API
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Base URL</Label>
-            <Input
-              type="url"
-              value={settings.openai.baseUrl}
-              onChange={(e) => updateOpenAI({ baseUrl: e.target.value })}
-              placeholder="https://api.openai.com/v1"
-            />
-            {settings.openai.baseUrl && (
-              <p className="text-xs text-muted-foreground break-all">
-                Requests will be sent to:{' '}
-                {chatCompletionsUrl(settings.openai.baseUrl)}
-              </p>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>API Key</Label>
-            <Input
-              type="password"
-              value={settings.openai.apiKey}
-              onChange={(e) => updateOpenAI({ apiKey: e.target.value })}
-              placeholder="sk-..."
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Model</Label>
-            <Input
-              value={settings.openai.model}
-              onChange={(e) => updateOpenAI({ model: e.target.value })}
-              placeholder="gpt-4o-mini"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>System Prompt</Label>
-            <Textarea
-              value={settings.openai.systemPrompt}
-              onChange={(e) => updateOpenAI({ systemPrompt: e.target.value })}
-              placeholder="You are a translator..."
-            />
-            <p className="text-xs text-muted-foreground">
-              Use {'{{targetLang}}'} as a placeholder for the target language.
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <Button
-              variant="outline"
-              onClick={testOpenAIConnection}
-              disabled={testing || !settings.openai.apiKey}
-            >
-              {testing ? 'Testing...' : 'Test connection'}
-            </Button>
-            {testResult && (
-              <p
-                className={`text-sm ${
-                  testResult.ok ? 'text-green-600' : 'text-red-600'
-                }`}
-              >
-                {testResult.msg}
-              </p>
-            )}
-          </div>
-        </section>
-      )}
-
-      <section className="space-y-4">
-        <div className="flex items-start gap-2">
-          <Checkbox
-            id="developer-mode"
-            checked={settings.developerMode}
-            onCheckedChange={(checked) =>
-              update({ developerMode: checked === true })
-            }
-          />
-          <div className="grid gap-0.5 leading-none">
-            <Label htmlFor="developer-mode" className="cursor-pointer">
-              Developer Mode
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              Enables access to features suitable for technical users.
-            </p>
-          </div>
-        </div>
-
-        {settings.developerMode && (
-          <>
+      {section === 'general' ? (
+        <>
+          <section className="space-y-4">
             <div className="space-y-1.5">
-              <Label>Custom Skip Rules</Label>
-              <Textarea
-                value={settings.customRules}
-                onChange={(e) => update({ customRules: e.target.value })}
-                placeholder={
-                  '! Example: skip element on a specific site\n! reddit.com##[id="expand-search-button"]'
-                }
-                className="min-h-32 font-mono text-xs"
+              <Label>Target Language</Label>
+              <Select
+                value={settings.targetLang}
+                onValueChange={(v) => update({ targetLang: v })}
+              >
+                <SelectTrigger className="w-full" id="imp-lang">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper" className="max-h-60">
+                  {LANGUAGES_SORTED.map(([code, name]) => (
+                    <SelectItem key={code} value={code}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Display</Label>
+              <SegmentedControl
+                id="imp-display"
+                ariaLabel="Display"
+                value={settings.renderMode}
+                onChange={(v) => update({ renderMode: v })}
+                options={DISPLAY_OPTIONS}
               />
-              <p className="text-xs text-muted-foreground">
-                Syntax:{' '}
-                <code className="bg-muted px-1 rounded">domain##selector</code>{' '}
-                — elements matching the CSS selector will not be translated.
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <div>
+              <h2 className="font-semibold">Toggle Shortcut</h2>
+              <p className="text-sm text-muted-foreground">
+                Keyboard shortcut that translates or restores the current page.
               </p>
             </div>
 
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Button
+                  id="hotkey"
+                  variant="outline"
+                  size="sm"
+                  className="font-mono"
+                  aria-label="Toggle shortcut"
+                  disabled={hotkeyCapability !== 'apply'}
+                  // A disabled button swallows hover, so the reason it is
+                  // disabled has to live in the title as well as the note below.
+                  title={
+                    hotkeyReadOnly
+                      ? 'Chrome does not let extensions assign shortcuts'
+                      : undefined
+                  }
+                  onClick={() => {
+                    setRecordingHint(null)
+                    setRecording(true)
+                  }}
+                >
+                  {recording
+                    ? 'Press keys…'
+                    : hotkeyReadOnly
+                      ? // What the browser will really fire, and nothing else.
+                        // Falling back to settings.hotkey re-creates the "saved
+                        // but never applied" lie: getSettings() merges
+                        // DEFAULT_SETTINGS.hotkey, so a stored value can exist
+                        // with no binding behind it.
+                        hotkeyState?.active
+                        ? formatHotkey(hotkeyState.active)
+                        : 'Not set'
+                      : settings.hotkey
+                        ? formatHotkey(settings.hotkey)
+                        : 'Not set'}
+                </Button>
+                {settings.hotkey !== '' && !recording && !hotkeyReadOnly && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => commitHotkey('')}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </div>
+              {hotkeyCapability === 'apply' && (
+                <p className="text-xs text-muted-foreground">
+                  Click the button, then press a combination. Backspace clears
+                  it, Escape cancels.
+                </p>
+              )}
+              {recording && recordingHint && (
+                <p className="text-xs text-destructive">{recordingHint}</p>
+              )}
+              {hotkeyCapability === 'apply' &&
+                (hotkeyState?.active ? (
+                  <p className="text-xs text-muted-foreground">
+                    Currently active: {formatHotkey(hotkeyState.active)}
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Not active in the browser.
+                  </p>
+                ))}
+              {hotkeyCapability === 'error' && (
+                <p className="text-xs text-muted-foreground">
+                  Could not read the browser's shortcut settings, so the field
+                  above is read-only here. Reload to try again.
+                </p>
+              )}
+              {hotkeyReadOnly && (
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">
+                    Chrome does not let extensions assign shortcuts. The field
+                    above is read-only here, so finish the binding in the
+                    browser's shortcut settings.
+                  </p>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0"
+                    onClick={() => {
+                      // Chrome blocks navigation to some chrome:// URLs;
+                      // failing quietly beats an unhandled rejection in the
+                      // console.
+                      void browser.tabs
+                        .create({ url: 'chrome://extensions/shortcuts' })
+                        .catch(() => {})
+                    }}
+                  >
+                    Open browser shortcut settings
+                  </Button>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="space-y-4">
             <div className="flex items-start gap-2">
               <Checkbox
-                id="debug-mode"
-                checked={settings.debugMode}
+                id="developer-mode"
+                checked={settings.developerMode}
                 onCheckedChange={(checked) =>
-                  update({ debugMode: checked === true })
+                  update({ developerMode: checked === true })
                 }
               />
               <div className="grid gap-0.5 leading-none">
-                <Label htmlFor="debug-mode" className="cursor-pointer">
-                  Debug Mode
+                <Label htmlFor="developer-mode" className="cursor-pointer">
+                  Developer Mode
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  Outline blocks whose translation matched the original (likely
-                  false positives) so you can write skip rules for them.
+                  Enables access to features suitable for technical users.
                 </p>
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Button
-                variant="outline"
-                onClick={async () => {
-                  setRefreshingRules(true)
-                  try {
-                    await messager.sendMessage('refreshRemoteRules', undefined)
-                    setRefreshResult({ ok: true, msg: 'Remote rules refreshed.' })
-                  } catch (err) {
-                    const message = err instanceof Error ? err.message : String(err)
-                    setRefreshResult({ ok: false, msg: `Failed to refresh: ${message}` })
-                  } finally {
-                    setRefreshingRules(false)
-                  }
-                }}
-                disabled={refreshingRules}
+            {settings.developerMode && (
+              <>
+                <div className="space-y-1.5">
+                  <Label>Custom Skip Rules</Label>
+                  <Textarea
+                    value={settings.customRules}
+                    onChange={(e) => update({ customRules: e.target.value })}
+                    placeholder={
+                      '! Example: skip element on a specific site\n! reddit.com##[id="expand-search-button"]'
+                    }
+                    className="min-h-32 font-mono text-xs"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Syntax:{' '}
+                    <code className="bg-muted px-1 rounded">domain##selector</code>{' '}
+                    — elements matching the CSS selector will not be
+                    translated.
+                  </p>
+                </div>
+
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    id="debug-mode"
+                    checked={settings.debugMode}
+                    onCheckedChange={(checked) =>
+                      update({ debugMode: checked === true })
+                    }
+                  />
+                  <div className="grid gap-0.5 leading-none">
+                    <Label htmlFor="debug-mode" className="cursor-pointer">
+                      Debug Mode
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Outline blocks whose translation matched the original
+                      (likely false positives) so you can write skip rules for
+                      them.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Button
+                    variant="outline"
+                    onClick={async () => {
+                      setRefreshingRules(true)
+                      try {
+                        await messager.sendMessage(
+                          'refreshRemoteRules',
+                          undefined,
+                        )
+                        setRefreshResult({
+                          ok: true,
+                          msg: 'Remote rules refreshed.',
+                        })
+                      } catch (err) {
+                        const message =
+                          err instanceof Error ? err.message : String(err)
+                        setRefreshResult({
+                          ok: false,
+                          msg: `Failed to refresh: ${message}`,
+                        })
+                      } finally {
+                        setRefreshingRules(false)
+                      }
+                    }}
+                    disabled={refreshingRules}
+                  >
+                    {refreshingRules ? 'Refreshing...' : 'Refresh Remote Rules'}
+                  </Button>
+                  {refreshResult && (
+                    <p
+                      className={`text-sm ${
+                        refreshResult.ok ? 'text-green-600' : 'text-red-600'
+                      }`}
+                    >
+                      {refreshResult.msg}
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+          </section>
+        </>
+      ) : (
+        <>
+          <section className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Translation Provider</Label>
+              <RadioGroup
+                value={settings.provider}
+                onValueChange={(v) =>
+                  update({ provider: v as TranslationProvider })
+                }
               >
-                {refreshingRules ? 'Refreshing...' : 'Refresh Remote Rules'}
-              </Button>
-              {refreshResult && (
-                <p
-                  className={`text-sm ${
-                    refreshResult.ok ? 'text-green-600' : 'text-red-600'
-                  }`}
-                >
-                  {refreshResult.msg}
-                </p>
-              )}
+                {PROVIDERS.map((p) => (
+                  <label
+                    key={p.value}
+                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
+                      settings.provider === p.value
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:border-primary/50'
+                    }`}
+                  >
+                    <RadioGroupItem value={p.value} className="mt-0.5" />
+                    <div>
+                      <div className="text-sm font-medium">{p.label}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {p.description}
+                      </div>
+                    </div>
+                  </label>
+                ))}
+              </RadioGroup>
             </div>
-          </>
-        )}
-      </section>
+          </section>
+
+          {settings.provider === 'imp' && (
+            <section className="space-y-4">
+              <div>
+                <h2 className="font-semibold">Imp Credits</h2>
+                <p className="text-sm text-muted-foreground">
+                  Hosted, metered translation. Connect an Imp account to use it
+                  without your own API key.
+                </p>
+              </div>
+
+              {impConnected ? (
+                <div className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-center gap-2 text-sm">
+                    <span
+                      className={`size-2 shrink-0 rounded-full ${
+                        connStatus === 'connected'
+                          ? 'bg-green-500'
+                          : connStatus === 'checking'
+                            ? 'bg-muted animate-pulse'
+                            : 'bg-red-500'
+                      }`}
+                    />
+                    <span className="truncate">
+                      {connStatus === 'connected'
+                        ? `Connected · ${settings.imp?.model ?? 'imp-standard'}`
+                        : connStatus === 'checking'
+                          ? 'Checking connection…'
+                          : 'Connection lost — reconnect'}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="ghost" size="sm" onClick={disconnectImp}>
+                      Use another provider
+                    </Button>
+                    <Button variant="secondary" size="sm" onClick={connectImp}>
+                      Reconnect
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Button className="w-full" onClick={connectImp}>
+                  Connect Imp Account
+                </Button>
+              )}
+            </section>
+          )}
+
+          {settings.provider === 'openai' && (
+            <section className="space-y-4">
+              <div>
+                <h2 className="font-semibold">OpenAI Compatible API</h2>
+                <p className="text-sm text-muted-foreground">
+                  Works with OpenAI, DeepSeek, Gemini, and any other
+                  OpenAI-compatible API
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Base URL</Label>
+                <Input
+                  type="url"
+                  value={settings.openai.baseUrl}
+                  onChange={(e) => updateOpenAI({ baseUrl: e.target.value })}
+                  placeholder="https://api.openai.com/v1"
+                />
+                {settings.openai.baseUrl && (
+                  <p className="text-xs text-muted-foreground break-all">
+                    Requests will be sent to:{' '}
+                    {chatCompletionsUrl(settings.openai.baseUrl)}
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>API Key</Label>
+                <Input
+                  type="password"
+                  value={settings.openai.apiKey}
+                  onChange={(e) => updateOpenAI({ apiKey: e.target.value })}
+                  placeholder="sk-..."
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Model</Label>
+                <Input
+                  value={settings.openai.model}
+                  onChange={(e) => updateOpenAI({ model: e.target.value })}
+                  placeholder="gpt-6-luna"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>System Prompt</Label>
+                <Textarea
+                  value={settings.openai.systemPrompt}
+                  onChange={(e) => updateOpenAI({ systemPrompt: e.target.value })}
+                  placeholder="You are a translator..."
+                />
+                <p className="text-xs text-muted-foreground">
+                  Use {'{{targetLang}}'} (or {'{{to}}'}) as the target-language
+                  placeholder. Any other {'{{placeholder}}'} is removed before
+                  the prompt is sent.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Extra Request Parameters</Label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setExtraBodyDraft(null)}
+                >
+                  Reset
+                </Button>
+                <Textarea
+                  value={extraBodyText}
+                  onChange={(e) => commitExtraBody(e.target.value)}
+                  placeholder='{ "temperature": 0 }'
+                  className="min-h-32 font-mono text-xs"
+                />
+                {extraBodyStatus.ok ? (
+                  <p className="text-xs text-muted-foreground">
+                    Sent with every request:{' '}
+                    {Object.keys(extraBodyStatus.value).join(', ') || 'none'}
+                  </p>
+                ) : (
+                  <p className="text-xs text-destructive">{extraBodyStatus.error}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Merged into the request body after the built-in defaults, so
+                  these win. Parameter names and shapes are provider-specific:
+                  check your provider's documentation for what it accepts.
+                  model, messages and stream are managed by the extension.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Max requests per second</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={settings.openai.maxRequestsPerSecond}
+                  onChange={(e) =>
+                    updateOpenAI({
+                      maxRequestsPerSecond: parseNonNegativeInt(e.target.value),
+                    })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  0 removes the client-side cap entirely.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Max characters per request</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={settings.openai.maxCharsPerRequest}
+                  onChange={(e) =>
+                    updateOpenAI({
+                      maxCharsPerRequest: parseNonNegativeInt(e.target.value),
+                    })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  0 uses the provider default (4096).
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Max texts per request</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={settings.openai.maxTextsPerRequest}
+                  onChange={(e) =>
+                    updateOpenAI({
+                      maxTextsPerRequest: parseNonNegativeInt(e.target.value),
+                    })
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  0 uses the provider default (8).
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Button
+                  variant="outline"
+                  onClick={testOpenAIConnection}
+                  disabled={testing || !settings.openai.apiKey}
+                >
+                  {testing ? 'Testing...' : 'Test connection'}
+                </Button>
+                {testResult && (
+                  <p
+                    className={`text-sm ${
+                      testResult.ok ? 'text-green-600' : 'text-red-600'
+                    }`}
+                  >
+                    {testResult.msg}
+                  </p>
+                )}
+              </div>
+            </section>
+          )}
+        </>
+      )}
     </div>
   )
 }

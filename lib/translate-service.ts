@@ -1,10 +1,17 @@
+export interface BatchLimits {
+  batchWindowMs: number
+  maxBatchSize: number
+  maxBatchChars?: number
+}
+
 export interface TranslateServiceConfig {
   getCached: (text: string, lang: string) => Promise<string | undefined>
   setCached: (text: string, lang: string, translated: string) => Promise<void>
   translator: (texts: string[], lang: string) => Promise<string[]>
-  batchWindowMs: number
-  maxBatchSize: number
-  maxBatchChars?: number
+  // Resolved per enqueue, not per service: the background memoises one
+  // service per provider, so limits captured at construction would go stale
+  // the moment the options page saves a new one.
+  getLimits: () => BatchLimits
   onAfterFlush?: () => void
 }
 
@@ -94,6 +101,7 @@ export function createTranslateService(config: TranslateServiceConfig): Translat
   }
 
   function enqueue(text: string, lang: string): Promise<string> {
+    const { batchWindowMs, maxBatchSize, maxBatchChars } = config.getLimits()
     return new Promise<string>((resolve, reject) => {
       let q = queues.get(lang)
       if (!q) {
@@ -101,18 +109,18 @@ export function createTranslateService(config: TranslateServiceConfig): Translat
         queues.set(lang, q)
       }
       if (
-        config.maxBatchChars !== undefined &&
+        maxBatchChars !== undefined &&
         q.pending.length > 0 &&
-        q.pendingChars + text.length > config.maxBatchChars
+        q.pendingChars + text.length > maxBatchChars
       ) {
         flush(lang)
       }
       q.pending.push({ text, resolve, reject })
       q.pendingChars += text.length
-      if (q.pending.length >= config.maxBatchSize) {
+      if (q.pending.length >= maxBatchSize) {
         flush(lang)
       } else if (!q.timer) {
-        q.timer = setTimeout(() => flush(lang), config.batchWindowMs)
+        q.timer = setTimeout(() => flush(lang), batchWindowMs)
       }
     })
   }

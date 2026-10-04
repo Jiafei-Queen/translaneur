@@ -46,6 +46,15 @@ describe('disableOpenAIReasoning', () => {
     expect(req.body.reasoning_effort).toBe('none')
   })
 
+  // The shipped default model. Its name is neither a gpt-3/4 legacy model nor a
+  // bare `gpt-5`, so it must land on the disabled-reasoning branch - renaming the
+  // default would otherwise silently change what every install sends.
+  it('sets reasoning_effort=none for gpt-6-luna', () => {
+    const req = makeReq('gpt-6-luna')
+    applyRequestInterceptors(req)
+    expect(req.body.reasoning_effort).toBe('none')
+  })
+
   it('does NOT set for gpt-4o', () => {
     const req = makeReq('gpt-4o')
     applyRequestInterceptors(req)

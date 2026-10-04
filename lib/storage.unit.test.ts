@@ -29,7 +29,7 @@ describe('storage', () => {
     const settings = await getSettings()
     expect(settings.provider).toBe('google')
     expect(settings.targetLang).toBeTruthy()
-    expect(settings.openai.model).toBe('gpt-4o-mini')
+    expect(settings.openai.model).toBe('gpt-6-luna')
   })
 
   it('saveSettings only persists provided fields', async () => {
@@ -45,7 +45,7 @@ describe('storage', () => {
     const settings = await getSettings()
     expect(settings.targetLang).toBe('ja')
     expect(settings.provider).toBe('google')
-    expect(settings.openai.model).toBe('gpt-4o-mini')
+    expect(settings.openai.model).toBe('gpt-6-luna')
   })
 
   it('multiple partial saves accumulate without overwriting', async () => {
@@ -85,11 +85,56 @@ describe('storage', () => {
       baseUrl: 'https://custom.api/v1',
       model: 'gpt-4o',
       systemPrompt: 'Translate to {{targetLang}}.',
+      extraBody: {},
+      maxRequestsPerSecond: 0,
+      maxTextsPerRequest: 8,
+      maxCharsPerRequest: 1000,
     }
     await saveSettings({ openai })
     const settings = await getSettings()
-    expect(settings.openai).toEqual(openai)
+    expect(settings.openai).toMatchObject(openai)
     expect(settings.provider).toBe('google')
+  })
+
+  it('fills in openai fields a stored config predates', async () => {
+    localStore.set('settings', {
+      openai: {
+        apiKey: 'sk-old',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4o',
+        systemPrompt: 'Translate.',
+      },
+    })
+    const { getSettings } = await import('./storage')
+    const { openai } = await getSettings()
+
+    expect(openai.extraBody).toEqual({
+      temperature: 0,
+      reasoning: { effort: 'none' },
+    })
+    expect(openai.maxRequestsPerSecond).toBe(5)
+    expect(openai.maxTextsPerRequest).toBe(8)
+    expect(openai.maxCharsPerRequest).toBe(4096)
+  })
+
+  it('a later partial save keeps the openai keys it did not mention', async () => {
+    const { saveSettings, getSettings } = await import('./storage')
+    const base = await getSettings()
+    await saveSettings({
+      openai: { ...base.openai, extraBody: { temperature: 0 } },
+    })
+    await saveSettings({ targetLang: 'ja' })
+
+    const settings = await getSettings()
+    expect(settings.openai.extraBody).toEqual({ temperature: 0 })
+    expect(settings.openai.model).toBe('gpt-6-luna')
+    expect(settings.targetLang).toBe('ja')
+  })
+
+  it('peekSettings reports what getSettings last resolved', async () => {
+    const { getSettings, peekSettings } = await import('./storage')
+    await getSettings()
+    expect(peekSettings().openai.maxTextsPerRequest).toBe(8)
   })
 })
 

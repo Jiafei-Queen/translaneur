@@ -73,6 +73,10 @@ const openaiSettings: Settings = {
     baseUrl: 'https://api.example.com/v1',
     model: 'gpt-4o-mini',
     systemPrompt: 'You are a translator. Translate the following text to {{targetLang}}. Return only the translation, no explanations.',
+    extraBody: {},
+    maxRequestsPerSecond: 0,
+    maxTextsPerRequest: 8,
+    maxCharsPerRequest: 1000,
   },
 }
 
@@ -157,6 +161,79 @@ describe('OpenAI response parsing', () => {
   })
 })
 
+describe('OpenAI custom request body params', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.restoreAllMocks()
+  })
+
+  function settingsWith(overrides: Partial<Settings['openai']>): Settings {
+    return { ...openaiSettings, openai: { ...openaiSettings.openai, ...overrides } }
+  }
+
+  it('lets an explicit reasoning_effort win over the built-in guess', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockResolvedValue(mockOpenAIResponse('你好'))
+
+    const { translate } = await import('./translator')
+    await translate(
+      ['Hello'],
+      'zh',
+      settingsWith({
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'o3-mini',
+        extraBody: { reasoning_effort: 'low' },
+      }),
+    )
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    // disableOpenAIReasoning writes 'none' for this model+host; the user's
+    // value is applied afterwards and must survive.
+    expect(body.reasoning_effort).toBe('low')
+  })
+
+  it('sends arbitrary params and leaves messages untouched', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockResolvedValue(mockOpenAIResponse('你好'))
+
+    const { translate } = await import('./translator')
+    await translate(
+      ['Hello'],
+      'zh',
+      settingsWith({
+        extraBody: { temperature: 0, thinking: { type: 'disabled' } },
+      }),
+    )
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    expect(body.temperature).toBe(0)
+    expect(body.thinking).toEqual({ type: 'disabled' })
+    expect(body.messages).toHaveLength(2)
+  })
+
+  it('ignores reserved keys written straight into storage', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockResolvedValue(mockOpenAIResponse('你好'))
+
+    const { translate } = await import('./translator')
+    await translate(
+      ['Hello'],
+      'zh',
+      settingsWith({
+        model: 'real-model',
+        extraBody: { model: 'hijacked', stream: true },
+      }),
+    )
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string)
+    expect(body.model).toBe('real-model')
+    expect(body).not.toHaveProperty('stream')
+  })
+})
+
 describe('LLM explanation detection', () => {
   beforeEach(() => {
     vi.resetModules()
@@ -223,6 +300,10 @@ const msSettings: Settings = {
     baseUrl: '',
     model: '',
     systemPrompt: '',
+    extraBody: {},
+    maxRequestsPerSecond: 0,
+    maxTextsPerRequest: 8,
+    maxCharsPerRequest: 1000,
   },
 }
 
@@ -526,6 +607,10 @@ const impSettings: Settings = {
     baseUrl: '',
     model: '',
     systemPrompt: '',
+    extraBody: {},
+    maxRequestsPerSecond: 0,
+    maxTextsPerRequest: 8,
+    maxCharsPerRequest: 1000,
   },
   imp: {
     apiKey: 'imp-key',

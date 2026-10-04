@@ -1,9 +1,9 @@
 import { checkConnection, exchangeCode, humanizeError } from '@rxliuli/imp-credits-sdk'
 import { messager } from '@/lib/message'
-import { getSettings, saveSettings, type TranslationProvider } from '@/lib/storage'
+import { getSettings, saveSettings, peekSettings, type TranslationProvider } from '@/lib/storage'
 import { translate } from '@/lib/translator'
 import { getCached, setCached, evictOldEntries } from '@/lib/cache'
-import { createTranslateService, type TranslateService } from '@/lib/translate-service'
+import { createTranslateService, type BatchLimits, type TranslateService } from '@/lib/translate-service'
 import { eldDetectLanguage } from '@/lib/eld-detect'
 import { parseRules, matchRulesForHostname, type SiteRule } from '@/lib/rules'
 import { getEffectiveRules, setupRemoteRulesAlarm, fetchRemoteRulesIfNeeded } from '@/lib/remote-rules'
@@ -272,10 +272,7 @@ export default defineBackground(() => {
     return await getMatchedRulesForHostname(data.hostname)
   })
 
-  const BATCH_PARAMS: Record<
-    TranslationProvider,
-    { batchWindowMs: number; maxBatchSize: number; maxBatchChars?: number }
-  > = {
+  const BATCH_PARAMS: Record<TranslationProvider, BatchLimits> = {
     microsoft: { batchWindowMs: 50, maxBatchSize: 25 },
     google: { batchWindowMs: 50, maxBatchSize: 20, maxBatchChars: 14000 },
     openai: { batchWindowMs: 100, maxBatchSize: 8, maxBatchChars: 1000 },
@@ -292,7 +289,16 @@ export default defineBackground(() => {
     if (!service) {
       const t = debugTime(`bg:createService(${provider})`)
       service = createTranslateService({
-        ...BATCH_PARAMS[provider],
+        getLimits: () => {
+          const base = BATCH_PARAMS[provider]
+          if (provider !== 'openai') return base
+          const { openai } = peekSettings()
+          return {
+            batchWindowMs: base.batchWindowMs,
+            maxBatchSize: openai.maxTextsPerRequest || base.maxBatchSize,
+            maxBatchChars: openai.maxCharsPerRequest || base.maxBatchChars,
+          }
+        },
         getCached,
         setCached,
         translator: async (texts, lang) => {

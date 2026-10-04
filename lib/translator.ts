@@ -1,6 +1,11 @@
 import { toGoogleMarkupSource } from './align'
 import type { Settings } from './storage'
 import { applyRequestInterceptors, type OpenAIRequest } from './interceptors'
+import { renderSystemPrompt } from './prompt'
+import { applyCustomParams } from './openai-params'
+import { createRateLimiter } from './rate-limiter'
+
+const openaiRateLimiter = createRateLimiter(0)
 
 const SHORT_TEXT_LIMIT = 20
 const EXPANSION_RATIO = 3
@@ -278,11 +283,18 @@ async function translateOpenAI(
   targetLang: string,
   settings: Settings,
 ): Promise<TranslationResult> {
-  const { apiKey, baseUrl, model, systemPrompt } = settings.openai
+  const {
+    apiKey,
+    baseUrl,
+    model,
+    systemPrompt,
+    extraBody,
+    maxRequestsPerSecond,
+  } = settings.openai
   if (!apiKey) throw new Error('OpenAI API key is not configured')
   if (!baseUrl) throw new Error('Base URL is not configured')
 
-  const prompt = systemPrompt.replace('{{targetLang}}', targetLang)
+  const prompt = renderSystemPrompt(systemPrompt, targetLang)
   const single = texts.length === 1
   const userContent = single
     ? texts[0]
@@ -307,6 +319,12 @@ async function translateOpenAI(
     },
   }
   applyRequestInterceptors(req)
+  // After the interceptors: an explicit user value must beat the hostname
+  // guess that disableOpenAIReasoning writes.
+  applyCustomParams(req.body, extraBody)
+
+  openaiRateLimiter.setLimit(maxRequestsPerSecond)
+  await openaiRateLimiter.acquire()
 
   const resp = await fetch(req.endpoint, {
     method: 'POST',

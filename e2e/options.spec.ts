@@ -1,5 +1,14 @@
 import { test, expect } from './fixtures'
 import { setSettings, stubBrowserShortcut } from './helpers'
+import type { Page } from '@playwright/test'
+
+const providerSection = (page: Page) =>
+  page.locator('[role="radiogroup"][aria-label="Settings section"] [data-value="provider"]')
+
+const openProviderSection = async (page: Page) => {
+  await providerSection(page).click()
+  await expect(providerSection(page)).toHaveAttribute('aria-checked', 'true')
+}
 
 test('options page renders with default settings', async ({
   context,
@@ -7,6 +16,8 @@ test('options page renders with default settings', async ({
 }) => {
   const page = await context.newPage()
   await page.goto(`chrome-extension://${extensionId}/options.html`)
+
+  await openProviderSection(page)
 
   await expect(page.locator('text=Translaneur')).toBeVisible()
   await expect(page.locator('text=Microsoft Translator')).toBeVisible()
@@ -24,7 +35,11 @@ test('options page shows OpenAI settings when selected', async ({
   const page = await context.newPage()
   await page.goto(`chrome-extension://${extensionId}/options.html`)
 
-  await expect(page.locator('input[type="password"]')).not.toBeVisible()
+  // The OpenAI form sits behind the Provider section, so the API key field is
+  // absent until that provider is selected.
+  await expect(page.locator('input[type="password"]')).toHaveCount(0)
+
+  await openProviderSection(page)
 
   await page.locator('button[role="radio"][value="openai"]').click()
 
@@ -49,12 +64,14 @@ test('options page saves and persists settings', async ({
   await page.getByRole('option', { name: '日本語' }).click()
 
   // Pick the non-default provider so the reload actually proves persistence
+  await openProviderSection(page)
   await page.locator('button[role="radio"][value="microsoft"]').click()
 
   await page.waitForTimeout(200)
   await page.reload()
 
   await expect(page.locator('#imp-lang')).toContainText('日本語')
+  await openProviderSection(page)
   await expect(page.locator('button[role="radio"][value="microsoft"]')).toHaveAttribute('data-state', 'checked')
 })
 

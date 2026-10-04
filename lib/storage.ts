@@ -1,4 +1,5 @@
 import { DEFAULT_HOTKEY } from './hotkey'
+import { DEFAULT_SYSTEM_PROMPT } from './prompt'
 
 export type TranslationProvider = 'microsoft' | 'google' | 'openai' | 'imp'
 
@@ -15,7 +16,19 @@ export interface OpenAIConfig {
   baseUrl: string
   model: string
   systemPrompt: string
+  /**
+   * Merged into the chat/completions request body verbatim. The shape of any
+   * key here is provider-specific - check the endpoint's own docs.
+   */
+  extraBody: Record<string, unknown>
+  /** Requests per second this client may issue. 0 = no client-side cap. */
+  maxRequestsPerSecond: number
+  /** Texts per request. 0 falls back to the provider's built-in batch cap. */
+  maxTextsPerRequest: number
+  /** Characters per request. 0 falls back to the provider's built-in cap. */
+  maxCharsPerRequest: number
 }
+
 
 export interface Settings {
   provider: TranslationProvider
@@ -44,9 +57,12 @@ const DEFAULT_SETTINGS: Settings = {
   openai: {
     apiKey: '',
     baseUrl: 'https://api.openai.com/v1',
-    model: 'gpt-4o-mini',
-    systemPrompt:
-      'You are a translator. Translate the following text to {{targetLang}}. Return only the translation, no explanations. If the text cannot be translated, return it unchanged.',
+    model: 'gpt-6-luna',
+    systemPrompt: DEFAULT_SYSTEM_PROMPT,
+    extraBody: { temperature: 0, reasoning: { effort: 'none' } },
+    maxRequestsPerSecond: 5,
+    maxTextsPerRequest: 8,
+    maxCharsPerRequest: 4096,
   },
 }
 
@@ -65,13 +81,40 @@ function migrateLegacyEndpoint(raw: Partial<Settings>): Partial<Settings> {
   return { ...raw, openai: { ...rest, baseUrl } }
 }
 
+// A shallow spread would let a stored `openai` object replace the default one
+// wholesale, leaving every field it predates undefined. Nested merge is what
+// makes adding a field to OpenAIConfig safe.
+function mergeWithDefaults(raw: Partial<Settings>): Settings {
+  return {
+    ...DEFAULT_SETTINGS,
+    ...raw,
+    openai: { ...DEFAULT_SETTINGS.openai, ...(raw.openai ?? {}) },
+  }
+}
+
+let cachedSettings: Settings | null = null
+
+/**
+ * Synchronous read of the last settings seen by getSettings/saveSettings.
+ * Batching needs the limits without awaiting storage. Never mutate the result.
+ */
+export function peekSettings(): Settings {
+  return (
+    cachedSettings ?? {
+      ...DEFAULT_SETTINGS,
+      openai: { ...DEFAULT_SETTINGS.openai },
+    }
+  )
+}
+
+
 export async function getSettings(): Promise<Settings> {
   const stored = await browser.storage.local.get('settings')
-  if (!stored.settings) return { ...DEFAULT_SETTINGS }
+  if (!stored.settings) return (cachedSettings = mergeWithDefaults({}))
   const raw = stored.settings as Partial<Settings>
   const migrated = migrateLegacyEndpoint(raw)
   if (migrated !== raw) await browser.storage.local.set({ settings: migrated })
-  return { ...DEFAULT_SETTINGS, ...migrated }
+  return (cachedSettings = mergeWithDefaults(migrated))
 }
 
 export async function saveSettings(
@@ -81,5 +124,5 @@ export async function saveSettings(
   const raw = migrateLegacyEndpoint((stored.settings ?? {}) as Partial<Settings>)
   const merged = { ...raw, ...settings }
   await browser.storage.local.set({ settings: merged })
-  return { ...DEFAULT_SETTINGS, ...merged }
+  return (cachedSettings = mergeWithDefaults(merged))
 }
