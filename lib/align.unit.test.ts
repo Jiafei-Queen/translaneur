@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMarkedSource, splitTranslation, toGoogleMarkupSource } from './align'
+import { buildMarkedSource, splitTranslation, stripMarkers, toGoogleMarkupSource } from './align'
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
@@ -23,6 +23,55 @@ describe('buildMarkedSource', () => {
   it('strips x-tag literals that survive a Google round-trip', () => {
     // A surviving literal would otherwise be read back as a phantom run id.
     expect(buildMarkedSource([`<x id="1"></x>${'k'}eep`, 'more'])).toBe('⟦1⟧keep⟦2⟧more')
+  })
+
+  // A single-run block is never split (splitTranslation returns the response
+  // verbatim at n === 1), so its text cannot forge a marker — nothing parses it.
+  // Sanitizing there only destroys page text, and `⟦a, b⟧` is how Wikipedia
+  // writes a closed interval. These run text verbatim now.
+  it('leaves a single run exactly as written, brackets included', () => {
+    expect(buildMarkedSource(['The interval is denoted ⟦a, b⟧ here.'])).toBe(
+      'The interval is denoted ⟦a, b⟧ here.',
+    )
+  })
+
+  it('leaves a single run with a literal numbered marker exactly as written', () => {
+    expect(buildMarkedSource(['A literal ⟦1⟧ marker typed here.'])).toBe(
+      'A literal ⟦1⟧ marker typed here.',
+    )
+  })
+
+  it('leaves a single run with an x-tag literal exactly as written', () => {
+    expect(buildMarkedSource(['An unknown tag <x id="1"></x> survives.'])).toBe(
+      'An unknown tag <x id="1"></x> survives.',
+    )
+  })
+})
+
+describe('stripMarkers', () => {
+  it('returns single-run text unchanged', () => {
+    expect(stripMarkers('plain text')).toBe('plain text')
+  })
+
+  it('removes canonical markers and rejoins the runs in order', () => {
+    expect(stripMarkers(buildMarkedSource(['Click ', 'here', ' now']))).toBe('Click here now')
+  })
+
+  // The digits are part of the marker. Stripping only the brackets leaves
+  // `1`/`2`/`3` behind, so the "plain" text stops being the page text — and it
+  // stops matching the other mode's cache key, which is the whole point of the
+  // shared form.
+  it('removes the run id with the brackets', () => {
+    expect(stripMarkers('⟦1⟧a⟦2⟧b⟦3⟧c')).toBe('abc')
+  })
+
+  it('removes the Google x-tag form too', () => {
+    expect(stripMarkers('<x id="1"></x>Click<x id="2"></x>here')).toBe('Clickhere')
+  })
+
+  it('round-trips buildMarkedSource for multi-run blocks', () => {
+    const runs = ['the ', 'free', ' encyclopedia']
+    expect(stripMarkers(buildMarkedSource(runs))).toBe(runs.join(''))
   })
 })
 

@@ -9,7 +9,7 @@ import {
   type ToastBarOptions,
 } from './render'
 import { clearTranslations, extractBlocks, getTranslatableRuns, markTranslated, type TranslatableBlock } from './dom'
-import { buildMarkedSource } from './align'
+import { buildMarkedSource, stripMarkers } from './align'
 
 describe('render', () => {
   it('should inject inside innermost inline element', () => {
@@ -791,5 +791,94 @@ describe('translation-only rendering', () => {
     expect(chip.className).toContain('imp-translate-loading')
     expect(onRetry).toHaveBeenCalledTimes(1)
     expect(onRetry.mock.calls[0]![0]).toHaveLength(1)
+  })
+})
+
+// Every block is sent marked so both display modes derive one cache key (see
+// lib/align.ts). These cover the bilingual side of that bargain: the markers
+// must not reach the page, and the noop check must still recognise a provider
+// that echoed the source back.
+describe('bilingual rendering with a marked payload', () => {
+  function linkFixture() {
+    document.body.innerHTML = '<p>Click <a href="/x">here</a> now</p>'
+    const p = document.querySelector('p') as HTMLElement
+    return { p, blocks: extractBlocks(document.body) as TranslatableBlock[] }
+  }
+
+  it('writes the joined runs, with no marker left in the DOM', () => {
+    const { p, blocks } = linkFixture()
+    expect(blocks[0]!.text).toBe('⟦1⟧Click ⟦2⟧here⟦3⟧ now')
+    injectLoading(blocks)
+    replaceWithTranslation(blocks, ['⟦1⟧点击⟦2⟧这里⟦3⟧立刻'])
+
+    const wrapper = p.querySelector('font.imp-translate-result')!
+    expect(wrapper.textContent).toBe('点击这里立刻')
+    expect(p.textContent).not.toMatch(/[⟦⟧]/)
+  })
+
+  // Markers carry run ids, so a plain strip would leave the response in the
+  // order the provider returned it. The exact split path is what undoes a
+  // reorder, and bilingual has to use it just as translation-only does.
+  it('rejoins reordered pieces in run order', () => {
+    const { p, blocks } = linkFixture()
+    injectLoading(blocks)
+    replaceWithTranslation(blocks, ['⟦3⟧立刻⟦1⟧点击⟦2⟧这里'])
+
+    const wrapper = p.querySelector('font.imp-translate-result')!
+    expect(wrapper.textContent).toBe('点击这里立刻')
+  })
+
+  // The noop comparison used to be against `block.text`, which is now marked,
+  // so it would never match and an echoed source would be written out with its
+  // markers showing. It has to compare the marker-free text.
+  it('treats a verbatim echo of a marked block as a no-op', () => {
+    const { p, blocks } = linkFixture()
+    injectLoading(blocks)
+    replaceWithTranslation(blocks, ['⟦1⟧Click ⟦2⟧here⟦3⟧ now'])
+
+    expect(p.querySelector('font.imp-translate-result')).toBeNull()
+    expect(p.hasAttribute('data-imp-noop')).toBe(true)
+  })
+
+  it('still treats a verbatim echo of a single-run block as a no-op', () => {
+    document.body.innerHTML = '<p>Hello world</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const blocks = extractBlocks(document.body) as TranslatableBlock[]
+    injectLoading(blocks)
+    replaceWithTranslation(blocks, ['Hello world'])
+
+    expect(p.querySelector('font.imp-translate-result')).toBeNull()
+    expect(p.hasAttribute('data-imp-noop')).toBe(true)
+  })
+
+  // A page may legitimately write ⟦1⟧ itself, and single-run blocks keep their
+  // text verbatim now. Re-parsing the marked string would read that as a marker
+  // and split a one-run response into two bogus pieces.
+  it('does not treat a page-authored bracket as a marker', () => {
+    document.body.innerHTML = '<p>The interval is denoted ⟦1⟧ here.</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const blocks = extractBlocks(document.body) as TranslatableBlock[]
+    expect(blocks[0]!.text).toBe('The interval is denoted ⟦1⟧ here.')
+    injectLoading(blocks)
+    replaceWithTranslation(blocks, ['这里用 ⟦1⟧ 表示区间。'])
+
+    const wrapper = p.querySelector('font.imp-translate-result')!
+    expect(wrapper.textContent).toBe('这里用 ⟦1⟧ 表示区间。')
+  })
+
+  // Layout, not billing: the markers are an artefact of the request and must not
+  // push a block onto its own line. The fixture straddles the threshold — 39
+  // visible chars across two runs, 45 marked — so a length check on the raw
+  // payload would take the `<br>` branch and break the line.
+  it('keeps a marked block under the short-text threshold inline', () => {
+    document.body.innerHTML = '<p><b>Short</b> block that stays inline here.</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const blocks = extractBlocks(document.body) as TranslatableBlock[]
+    expect(stripMarkers(blocks[0]!.text).length).toBeLessThanOrEqual(40)
+    expect(blocks[0]!.text.length).toBeGreaterThan(40)
+
+    injectLoading(blocks)
+    expect(p.querySelector('br.imp-translate-br')).toBeNull()
+    expect(p.querySelector('.imp-translate-spacer')).not.toBeNull()
   })
 })

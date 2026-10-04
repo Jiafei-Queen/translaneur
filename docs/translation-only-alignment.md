@@ -1,10 +1,11 @@
-# Translation-only run alignment
+# Run alignment
 
-How `translation-only` mode maps a translated block back onto the individual
-text nodes it came from, and what it does when it cannot.
+How a translated block is mapped back onto the individual text nodes it came
+from, and what it does when it cannot.
 
-Maintainer-facing. For what the mode promises the user, see the Features
-section of [`README.md`](../README.md).
+Maintainer-facing. For what the modes promise the user, see the Features
+section of [`README.md`](../README.md). For what the payload is used for beyond
+this — the cache key — see [`cache.md`](cache.md).
 
 ## The problem
 
@@ -47,6 +48,12 @@ Two constraints follow from the Google row:
 also the `data-imp-text` staleness token and the idb cache key. The Google wire
 form is produced per request by `toGoogleMarkupSource`. Keeping one canonical
 form means the token and the cache key stay provider-independent.
+
+It is the canonical form for **every** block, not just the ones that render in
+translation-only. The cache key is the reason: if the two display modes derived
+the payload differently, switching between them would miss every entry and
+re-translate the page. See [`cache.md`](cache.md). Bilingual pays the marker
+cost back by rejoining the pieces before writing, so the page never sees them.
 
 `splitTranslation` parses **both** syntaxes in a single ordered scan. This is
 required, not defensive: the cache key is `lang:text` and carries no provider,
@@ -92,20 +99,30 @@ term itself. See [`glossary.md`](glossary.md).
   runs hold translated text. Writing the pre-translation value breaks recheck.
 - `restoreTextNodes` only reverts a node whose current content still equals what
   we last wrote. If the page rewrote it, the page's content is the truth.
-- Sanitising run text of marker syntax is load-bearing: after a Google
-  round-trip, decoded page text can contain a literal `<x id="1"></x>`, and
-  without stripping it the next translation would parse a phantom run id.
+- Sanitising run text of marker syntax is load-bearing for **multi-run** blocks:
+  after a Google round-trip, decoded page text can contain a literal
+  `<x id="1"></x>`, and without stripping it the next translation would parse a
+  phantom run id. It is now also the only defence between the two modes, since
+  bilingual writes a response that translation-only will later read and split.
+  Single-run blocks skip it — `splitTranslation` never parses them, so there is
+  nothing to forge against, and sanitising only destroys page text (`⟦a, b⟧` is
+  how Wikipedia writes a closed interval).
+- The payload a block is sent as, compared as `data-imp-text`, and rebuilt after
+  a translation-only swap must all come from one function. Divergence here is
+  what made a mode switch re-translate the page.
 
 ## Code map
 
 | File | Symbol | Role |
 | --- | --- | --- |
-| `lib/align.ts` | `buildMarkedSource` | Runs → canonical `⟦N⟧` source; strips forged markers. |
+| `lib/align.ts` | `buildMarkedSource` | Runs → canonical `⟦N⟧` source; strips forged markers from multi-run blocks. |
+| `lib/align.ts` | `stripMarkers` | Canonical source → the visible text underneath. |
 | `lib/align.ts` | `toGoogleMarkupSource` | Canonical source → Google wire form, escaping run text only. |
 | `lib/align.ts` | `splitTranslation` | Response → per-run pieces, both marker syntaxes, with fallback. |
 | `lib/translator.ts` | `translateGoogle` | Chooses `toGoogleMarkupSource(text, escapeHtml)` per request. |
-| `lib/render.ts` | `replaceWithTranslation` | Writes pieces, or keeps the source when alignment is unverified. |
+| `lib/render.ts` | `replaceWithTranslation` | Writes pieces (translation-only) or the joined plain text (bilingual), or keeps the source when alignment is unverified. |
 | `lib/dom.ts` | `getTranslatableRuns` | The runs themselves; same inclusion rules as visible-text extraction. |
+| `lib/dom.ts` | `buildBlockSource` | The runs as one payload, edge-whitespace-trimmed. |
 
 ## Tests
 
@@ -114,6 +131,9 @@ calls" case that guards the shared-regex `lastIndex` reset. `lib/render.test.ts`
 covers the skip-on-unverified-alignment path and asserts the token stays
 untouched, so a future change that writes the token will fail the test rather
 than loop forever in production.
+
+`e2e/cache.spec.ts` pins the consequence of one payload for both modes: a
+Display switch adds nothing to the provider log.
 
 `e2e/` exercises the openai mock provider, which takes the `⟦N⟧` path. The
 Google `<x id>` path has no e2e coverage because the mock provider is

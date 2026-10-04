@@ -8,7 +8,9 @@ import {
   getVisibleText,
   getTranslatableRuns,
   swapTextNodes,
+  buildBlockSource,
 } from './dom'
+import { stripMarkers } from './align'
 
 describe('extractBlocks', () => {
   beforeEach(() => {
@@ -66,7 +68,11 @@ describe('extractBlocks', () => {
     const blocks = extractBlocks(document.body)
     expect(blocks).toHaveLength(2)
     expect(blocks[0].text).toBe('Title')
-    expect(blocks[1].text).toBe('Paragraph with bold text')
+    // A multi-run block carries run markers: the payload is marked so both
+    // display modes derive the same cache key. stripMarkers is the reader for
+    // the page text underneath.
+    expect(stripMarkers(blocks[1].text)).toBe('Paragraph with bold text')
+    expect(blocks[1].text).toBe('⟦1⟧Paragraph with ⟦2⟧bold⟦3⟧ text')
   })
 
   it('should treat container div with only inline text as a leaf', () => {
@@ -512,7 +518,7 @@ describe('extractBlocks', () => {
       '<p>Check out <a href="https://example.com">this site</a> for more info</p>'
     const blocks = extractBlocks(document.body)
     expect(blocks).toHaveLength(1)
-    expect(blocks[0].text).toBe('Check out this site for more info')
+    expect(stripMarkers(blocks[0].text)).toBe('Check out this site for more info')
     expect(blocks[0].element.tagName).toBe('P')
   })
 
@@ -523,7 +529,7 @@ describe('extractBlocks', () => {
       '<p>See <a href="https://example.com">https://example.com</a> today</p>'
     const blocks = extractBlocks(document.body)
     expect(blocks).toHaveLength(1)
-    expect(blocks[0].text).toBe('See https://example.com today')
+    expect(stripMarkers(blocks[0].text)).toBe('See https://example.com today')
   })
 
   it('clearTranslations unwraps synthesized wrappers, restoring DOM', () => {
@@ -1050,7 +1056,7 @@ describe('extractBlocks', () => {
         '<span><span class="hl">Heading paragraph of the post.</span><span>\n\nMiddle paragraph of the post.\n\nTail start of paragraph </span></span><a href="https://example.com/a">example.com/a</a><span> and tail end here.\n\nClosing paragraph of the post.</span>'
       document.body.appendChild(div)
       const blocks = extractBlocks(document.body)
-      expect(blocks.map((b) => b.text)).toEqual([
+      expect(blocks.map((b) => stripMarkers(b.text))).toEqual([
         'Heading paragraph of the post.',
         'Middle paragraph of the post.',
         'Tail start of paragraph example.com/a and tail end here.',
@@ -1192,5 +1198,61 @@ describe('translation-only runs', () => {
     expect(runs[0]!.data).toBe('页面更新')
     expect(runs[1]!.data).toBe('here')
     expect(runs[2]!.data).toBe(' now')
+  })
+})
+
+// The reason a block's payload is marked in both display modes: this string is
+// the cache key, so if the two modes derived it differently, switching display
+// mode would miss every entry and re-bill the whole page.
+describe('block payload', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('is derived from the runs, identically in both modes', () => {
+    document.body.innerHTML = '<p>Check out <a href="/x">this site</a> today</p>'
+    const p = document.querySelector('p') as HTMLElement
+    // Both display modes call buildBlockSource; extractBlocks stores the same
+    // value it produced, so the pre-translation token and the recomputed one
+    // cannot drift.
+    expect(buildBlockSource(p)).toBe('⟦1⟧Check out ⟦2⟧this site⟦3⟧ today')
+    expect(extractBlocks(document.body)[0]!.text).toBe(buildBlockSource(p))
+  })
+
+  it('stays equal across a simulated mode switch on the same DOM', () => {
+    document.body.innerHTML = '<p>Check out <a href="/x">this site</a> today</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const bilingual = buildBlockSource(p)
+    // translation-only writes translations into the runs, so the token is
+    // recomputed from the same function on the mutated DOM.
+    swapTextNodes(getTranslatableRuns(p), ['看看', '这个网站', '今天'])
+    const afterSwap = buildBlockSource(p)
+    expect(afterSwap).toBe('⟦1⟧看看⟦2⟧这个网站⟦3⟧今天')
+    // Restoring the original text restores the original payload, so a second
+    // pass is a cache hit rather than a re-translation.
+    clearTranslations(document.body)
+    expect(buildBlockSource(p)).toBe(bilingual)
+  })
+
+  it('drops edge whitespace, so indentation does not fork the key', () => {
+    document.body.innerHTML = '<div>\n  <span>Resetting feed</span>\n</div>'
+    const div = document.querySelector('div') as HTMLElement
+    expect(buildBlockSource(div)).toBe('Resetting feed')
+    expect(extractBlocks(document.body)[0]!.text).toBe(buildBlockSource(div))
+  })
+
+  it('keeps interior whitespace, which separates the segments', () => {
+    document.body.innerHTML = '<p>Click <a href="/x">here</a> now</p>'
+    const p = document.querySelector('p') as HTMLElement
+    // Trimming only the edges: "Click " keeps its trailing space, because that
+    // space is the gap between two segments and translation-only writes the runs
+    // back individually.
+    expect(buildBlockSource(p)).toBe('⟦1⟧Click ⟦2⟧here⟦3⟧ now')
+  })
+
+  it('is empty for a block with no runs', () => {
+    document.body.innerHTML = '<p>   </p>'
+    const p = document.querySelector('p') as HTMLElement
+    expect(buildBlockSource(p)).toBe('')
   })
 })

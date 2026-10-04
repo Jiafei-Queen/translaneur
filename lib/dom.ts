@@ -1,3 +1,5 @@
+import { buildMarkedSource } from './align'
+
 const INLINE_TAGS = new Set([
   '#text', 'a', 'abbr', 'acronym', 'b', 'bdi', 'bdo', 'big', 'br',
   'cite', 'code', 'del', 'dfn', 'em', 'font', 'i', 'input', 'ins', 'kbd',
@@ -186,33 +188,57 @@ function isHidden(el: HTMLElement): boolean {
   return getComputedStyle(el).visibility === 'hidden'
 }
 
-function visibleTextOfChild(child: Node, skipSelectors?: string[]): string {
-  if (child.nodeType === Node.TEXT_NODE) return child.textContent ?? ''
-  if (child.nodeType !== Node.ELEMENT_NODE) return ''
-  const childEl = child as HTMLElement
-  if (SKIP_TAGS.has(childEl.tagName.toLowerCase())) return ''
-  if (childEl.classList.contains(RESULT_CLASS)) return ''
-  if (childEl.classList.contains('notranslate')) return ''
-  if (childEl.getAttribute('translate') === 'no') return ''
-  if (childEl.isContentEditable) return ''
-  if (isHidden(childEl)) return ''
-  if (skipSelectors && skipSelectors.some((s) => childEl.matches(s))) return ''
-  return getVisibleText(childEl, skipSelectors)
+interface CollectedText {
+  /** The block's visible text — the same string getVisibleText always built. */
+  text: string
+  /** The text nodes it was built from, in document order. */
+  runs: Text[]
+}
+
+// One traversal, two products: a node list's visible text and the text nodes it
+// was built from. They are the same walk under the same skip rules, so fusing
+// them keeps `runs.join('') === text` structurally true rather than true by two
+// traversals happening to agree — and, more concretely, keeps the walk's layout
+// reads at one per element. Every extracted block needs both now, and each
+// isHidden in the run pass is a getComputedStyle; walking the subtree twice
+// doubled the cost of extraction, which the npm fixture budget guards.
+//
+// `skipSpacer` distinguishes the callers: our injected spacer belongs to
+// neither the page text nor the runs we may write into, but getVisibleText
+// never saw one (a spacer is created only after a block is extracted, and torn
+// down by clearTranslations), so it keeps its historical inclusive behaviour.
+function collectText(
+  nodes: ArrayLike<Node>,
+  skipSelectors?: string[],
+  skipSpacer = false,
+): CollectedText {
+  let text = ''
+  const runs: Text[] = []
+  function walk(node: Node): void {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const data = node.textContent ?? ''
+      text += data
+      if (data) runs.push(node as Text)
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return
+    const el = node as HTMLElement
+    if (SKIP_TAGS.has(el.tagName.toLowerCase())) return
+    if (el.classList.contains(RESULT_CLASS) || el.classList.contains('imp-translate-br')) return
+    if (skipSpacer && el.classList.contains(SPACER_CLASS)) return
+    if (el.classList.contains('notranslate')) return
+    if (el.getAttribute('translate') === 'no') return
+    if (el.isContentEditable) return
+    if (isHidden(el)) return
+    if (skipSelectors && skipSelectors.some((s) => el.matches(s))) return
+    for (const child of el.childNodes) walk(child)
+  }
+  for (let i = 0; i < nodes.length; i++) walk(nodes[i]!)
+  return { text, runs }
 }
 
 function getVisibleText(el: Element, skipSelectors?: string[]): string {
-  let text = ''
-  for (const child of el.childNodes) text += visibleTextOfChild(child, skipSelectors)
-  return text
-}
-
-// Same as getVisibleText but over an arbitrary node list rather than an
-// element's childNodes — lets us compute a wrapper's text from its prospective
-// children before the wrapper is actually created/inserted (deferred write).
-function visibleTextOfNodes(nodes: Node[], skipSelectors?: string[]): string {
-  let text = ''
-  for (const child of nodes) text += visibleTextOfChild(child, skipSelectors)
-  return text
+  return collectText(Array.from(el.childNodes), skipSelectors).text
 }
 
 function isBlockTag(tag: string): boolean {
@@ -480,15 +506,19 @@ export function extractBlocks(root: Element = document.body, opts?: ExtractOptio
         if (!contains) return false
       }
     }
-    const text = getVisibleText(node, opts?.skipSelectors).trim()
-    if (text && !NO_LETTER_RE.test(text) && !ASCII_SHORT_RE.test(text)) {
-      if (import.meta.env.DEV && text.length > OVERSIZED_BLOCK_THRESHOLD) {
+    // One traversal yields both the visible text (for the eligibility filters)
+    // and the runs (for the canonical payload). Walking twice would double the
+    // getComputedStyle calls the extraction budget guards — see collectText.
+    const { text, runs } = collectText(node.childNodes, opts?.skipSelectors)
+    const source = text.trim()
+    if (source && !NO_LETTER_RE.test(source) && !ASCII_SHORT_RE.test(source)) {
+      if (import.meta.env.DEV && source.length > OVERSIZED_BLOCK_THRESHOLD) {
         console.warn(
-          `[imp-translate] oversized block (${text.length} chars) — likely a walker bug. Element:`,
+          `[imp-translate] oversized block (${source.length} chars) — likely a walker bug. Element:`,
           node,
         )
       }
-      blocks.push({ element: node as HTMLElement, text })
+      blocks.push({ element: node as HTMLElement, text: buildMarkedSource(trimEdgeRuns(runs.map((r) => r.data))) })
       return true
     }
     return false
@@ -508,17 +538,21 @@ export function extractBlocks(root: Element = document.body, opts?: ExtractOptio
         if (!contains) return
       }
     }
-    const text = visibleTextOfNodes(seg, opts?.skipSelectors).trim()
-    if (!text || NO_LETTER_RE.test(text) || ASCII_SHORT_RE.test(text)) return
-    if (import.meta.env.DEV && text.length > OVERSIZED_BLOCK_THRESHOLD) {
+    // The segment nodes move into the wrapper only in the write phase, so the
+    // runs are collected from `seg` itself — reading them off the empty
+    // detached wrapper would yield nothing.
+    const { text, runs } = collectText(seg, opts?.skipSelectors)
+    const source = text.trim()
+    if (!source || NO_LETTER_RE.test(source) || ASCII_SHORT_RE.test(source)) return
+    if (import.meta.env.DEV && source.length > OVERSIZED_BLOCK_THRESHOLD) {
       console.warn(
-        `[imp-translate] oversized block (${text.length} chars) — likely a walker bug. Parent:`,
+        `[imp-translate] oversized block (${source.length} chars) — likely a walker bug. Parent:`,
         parent,
       )
     }
     const wrapper = parent.ownerDocument!.createElement('font')
     wrapper.setAttribute(WRAP_ATTR, 'true')
-    blocks.push({ element: wrapper, text })
+    blocks.push({ element: wrapper, text: buildMarkedSource(trimEdgeRuns(runs.map((r) => r.data))) })
     pendingWraps.push({ parent, wrapper, refNode: seg[0], seg })
   }
 
@@ -673,31 +707,62 @@ export function markTranslated(el: HTMLElement) {
   el.setAttribute(PROCESSED_ATTR, 'true')
 }
 
-// Text-node runs of a block for translation-only rendering: the individual
-// text nodes in document order, with the same inclusion rules as
-// visibleTextOfChild so that
+// Text-node runs of a block: the individual text nodes in document order,
+// with the same inclusion rules as the visible-text walk so that
 //   runs.map((r) => r.data).join('') === getVisibleText(element, skipSelectors).
+// Both modes need them — translation-only writes into them, bilingual splits
+// the response on their markers — so this is not a translation-only accessor.
 export function getTranslatableRuns(element: HTMLElement, skipSelectors?: string[]): Text[] {
-  const runs: Text[] = []
-  function collect(node: Node): void {
-    if (node.nodeType === Node.TEXT_NODE) {
-      if (node.textContent) runs.push(node as Text)
-      return
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) return
-    const el = node as HTMLElement
-    if (SKIP_TAGS.has(el.tagName.toLowerCase())) return
-    if (el.classList.contains(RESULT_CLASS) || el.classList.contains('imp-translate-br')) return
-    if (el.classList.contains(SPACER_CLASS)) return
-    if (el.classList.contains('notranslate')) return
-    if (el.getAttribute('translate') === 'no') return
-    if (el.isContentEditable) return
-    if (isHidden(el)) return
-    if (skipSelectors && skipSelectors.some((s) => el.matches(s))) return
-    for (const child of el.childNodes) collect(child)
-  }
-  for (const child of element.childNodes) collect(child)
-  return runs
+  return collectText(Array.from(element.childNodes), skipSelectors, true).runs
+}
+
+// A block's canonical translation payload: its runs, marked. The single source
+// of the string that is cached, compared as data-imp-text, and sent to the
+// provider — so all three agree by construction rather than by three callers
+// remembering to agree.
+//
+// Leading/trailing whitespace is dropped here rather than by a `.trim()` on the
+// finished string, because trimming the marked form would be meaningless: the
+// markers are at the very edges, so `"  a"` and `"a"` would keep different keys.
+// Trimming the run list is what makes the pre-extraction value, the token
+// written after a translation-only swap, and the recheck recomputation all
+// equal. Edge runs that become empty are dropped with their whitespace, so
+// `<a>text</a>` followed by a whitespace-only tail does not become a second,
+// empty run.
+export function buildBlockSource(element: HTMLElement, skipSelectors?: string[]): string {
+  return buildMarkedSource(blockRunTexts(element, skipSelectors))
+}
+
+// The run texts of a block, with edge whitespace removed. Exported so the
+// renderers split a response against exactly the run list the request was
+// built from.
+export function blockRunTexts(element: HTMLElement, skipSelectors?: string[]): string[] {
+  return trimEdgeRuns(getTranslatableRuns(element, skipSelectors).map((r) => r.data))
+}
+
+// Drop whitespace at both ends of the run list, and trim the outermost runs'
+// own text where that is where the whitespace sits.
+//
+// A `.trim()` on the marked string instead would be a no-op at the edges, since
+// that is where the markers sit — `"  a"` and `"a"` would keep different cache
+// keys for the same page text. Two cases the naive version misses: a
+// whitespace-only edge run (`<p>text <span translate="no">x</span></p>` leaves
+// a trailing `" "` run), and indentation inside the first/last run, which is
+// how `<a>` wrapped in newlines in a template literal reads.
+//
+// Only the edges move: interior runs keep their whitespace, because it is the
+// separation between segments and translation-only writes the runs back
+// individually — trimming it would reflow the page.
+function trimEdgeRuns(runs: string[]): string[] {
+  let start = 0
+  let end = runs.length
+  while (start < end && !runs[start]!.trim()) start++
+  while (end > start && !runs[end - 1]!.trim()) end--
+  const out = runs.slice(start, end)
+  if (out.length === 0) return out
+  out[0] = out[0]!.trimStart()
+  out[out.length - 1] = out[out.length - 1]!.trimEnd()
+  return out
 }
 
 // Original text of runs written by swapTextNodes. Keyed per node so repeated

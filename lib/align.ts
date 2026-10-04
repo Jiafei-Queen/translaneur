@@ -1,8 +1,15 @@
-// Maps a translated block back onto its text-node runs (translation-only mode).
+// A block's text-node runs, and how a translated block maps back onto them.
 //
 // A block is sent as one string, so a provider that reorders segments loses the
 // run boundaries. Each run is therefore prefixed with an id marker, and the
 // response is re-split on those ids.
+//
+// Every block is sent marked, in both display modes. That is what makes the
+// cache key mode-independent — a bilingual run and a later translation-only run
+// of the same block ask for the same string, so the second one is a cache hit
+// instead of a second bill. The bilingual renderer pays the split back by
+// rejoining the pieces (see replaceWithTranslation), so the markers never reach
+// the page.
 //
 // Two marker syntaxes exist because survival is provider-specific, measured on
 // real prose (synthetic `word1 word2…` inputs are misleading — they preserve
@@ -37,15 +44,32 @@ const ANY_MARK_RE = /<x id="(\d+)"><\/x>|⟦(\d+)⟧/g
  * `runTexts` (document order). Single-run blocks skip the marker noise; empty
  * input yields an empty string.
  *
- * Marker brackets and x-tag literals inside run text are stripped so page text
- * can't forge a marker — the x-tag form reappears in decoded text after a
- * Google round-trip, and a surviving literal would parse as a phantom run id.
+ * Multi-run blocks strip marker brackets and x-tag literals from run text so
+ * page text can't forge a marker — the x-tag form reappears in decoded text
+ * after a Google round-trip, and a surviving literal would parse as a phantom
+ * run id.
+ *
+ * Single-run blocks skip that strip: `splitTranslation` returns the response
+ * verbatim for them and never parses a marker, so there is nothing to forge
+ * against. Sanitizing there only destroys page text — `⟦a, b⟧` is how Wikipedia
+ * writes a closed interval, and single-run paragraphs are the common case.
  */
 export function buildMarkedSource(runTexts: string[]): string {
   if (runTexts.length === 0) return ''
+  if (runTexts.length === 1) return runTexts[0]!
   const sanitized = runTexts.map((text) => text.replace(/[⟦⟧]/g, '').replace(X_TAG_RE, ''))
-  if (sanitized.length === 1) return sanitized[0]!
   return sanitized.map((text, i) => `⟦${i + 1}⟧${text}`).join('')
+}
+
+/**
+ * A canonical marked source with every run marker removed, giving back the
+ * block's visible text.
+ *
+ * The digits are part of the marker: stripping only `[⟦⟧]` leaves `1`/`2`/`3`
+ * behind and the "plain" text no longer equals what the page shows.
+ */
+export function stripMarkers(marked: string): string {
+  return marked.replace(ANY_MARK_RE, '')
 }
 
 /**

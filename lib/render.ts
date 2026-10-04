@@ -1,5 +1,5 @@
-import { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, getTranslatableRuns, swapTextNodes, type TranslatableBlock } from './dom'
-import { buildMarkedSource, splitTranslation } from './align'
+import { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, getTranslatableRuns, blockRunTexts, swapTextNodes, type TranslatableBlock } from './dom'
+import { buildMarkedSource, splitTranslation, stripMarkers } from './align'
 import type { RenderMode } from './storage'
 import { LANGUAGES_SORTED } from './languages'
 
@@ -43,6 +43,16 @@ const LOADING_CLASS = 'imp-translate-loading'
 const ERROR_CLASS = 'imp-translate-error'
 const RETRY_CLASS = 'imp-translate-retry'
 const SHORT_TEXT_THRESHOLD = 40
+
+// Whether a block's visible text is short enough to put the translation on the
+// same line rather than pushing a <br>. Measured on the marker-free text: every
+// block is now sent marked (lib/align.ts), and the run markers are an artefact
+// of the request, not of the page, so they must not move the layout. A 3-run
+// block of 32 visible characters is 47 chars marked and would wrongly get a
+// line break.
+function isShortBlock(blockText: string): boolean {
+  return stripMarkers(blockText).length <= SHORT_TEXT_THRESHOLD
+}
 
 const STYLES_TEXT = `
     .${RESULT_CLASS} {
@@ -226,7 +236,7 @@ export function injectLoading(blocks: TranslatableBlock[]) {
 
     const target = findInjectionPoint(element)
     const ref = findTrailingNonTextRef(target)
-    const isShort = text.length <= SHORT_TEXT_THRESHOLD
+    const isShort = isShortBlock(text)
     const clampElement = hasLineClamp(element)
     const clampTarget = target !== element && hasLineClamp(target)
     const clipElement = !clampElement && hasOverflowClip(element)
@@ -299,7 +309,7 @@ export function repositionTranslation(element: HTMLElement, expectedText: string
     prev.parentElement?.removeChild(prev)
   }
 
-  const isShort = expectedText.length <= SHORT_TEXT_THRESHOLD
+  const isShort = isShortBlock(expectedText)
   const ref = findTrailingNonTextRef(correctTarget)
   if (isShort) {
     correctTarget.insertBefore(createSpacer(), ref)
@@ -381,19 +391,36 @@ export function replaceWithTranslation(
   }
 
   for (let i = 0; i < blocks.length; i++) {
-    const { element } = blocks[i]
+    const { element, text } = blocks[i]
     const translated = translations[i]
     const wrapper = element.querySelector(`.${RESULT_CLASS}`)
     if (!wrapper) continue
 
-    if (!translated || translated.toLowerCase() === blocks[i].text.toLowerCase()) {
+    // The run texts come from the DOM, not by re-parsing the markers: bilingual
+    // never writes into the runs, so they still hold exactly what the request
+    // was built from — whereas parsing the marked string would misread a page's
+    // own `⟦1⟧` in a single-run block as a marker and split the response into
+    // pieces that do not exist. blockRunTexts is the same trim the request used.
+    const runTexts = blockRunTexts(element, opts?.skipSelectors)
+    // Markers carry run ids, and a provider that reorders segments is exactly
+    // what splitTranslation's exact path exists to undo — so the plain text is
+    // rejoined in run order, not stripped. The fallback path joins back to the
+    // marker-free source, so the lossy case degrades to the original text rather
+    // than to scrambled segments.
+    const plain = translated ? splitTranslation(translated, runTexts).pieces.join('') : ''
+
+    // Compared against the marker-free source: `text` is marked, so comparing
+    // against it never matches, and a provider's verbatim echo would be written
+    // out with its markers intact.
+    const source = stripMarkers(text)
+    if (!plain || plain.toLowerCase() === source.toLowerCase()) {
       removeInjectedWrapper(wrapper)
       element.setAttribute('data-imp-noop', '')
       continue
     }
 
     wrapper.className = RESULT_CLASS
-    wrapper.textContent = translated
+    wrapper.textContent = plain
   }
 }
 
@@ -449,7 +476,7 @@ export function replaceWithError(
         // geometry as injectLoading.
         const target = findInjectionPoint(element)
         const ref = findTrailingNonTextRef(target)
-        if (text.length <= SHORT_TEXT_THRESHOLD) {
+        if (isShortBlock(text)) {
           target.insertBefore(createSpacer(), ref)
         } else if (!lastVisibleChildIsBlockLike(target, ref)) {
           const br = document.createElement('br')

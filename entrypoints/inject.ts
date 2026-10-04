@@ -11,11 +11,9 @@ import {
   PROCESSED_ATTR,
   RESULT_CLASS,
   SPACER_CLASS,
-  getTranslatableRuns,
-  getVisibleText,
+  buildBlockSource,
   needsBlankLineSplit,
 } from '@/lib/dom'
-import { buildMarkedSource } from '@/lib/align'
 import {
   injectLoading,
   replaceWithTranslation,
@@ -94,16 +92,19 @@ export default defineUnlistedScript(() => {
     return block.element.getAttribute('data-imp-text') !== block.text
   }
 
-  // The block's source text as the pipeline sees it. translation-only blocks
-  // are marked run lists (see buildMarkedSource), which is also what
+  // The block's source text as the pipeline sees it: its runs, marked. This is
+  // what extractBlocks put in block.text, what the cache keys on, and what
   // data-imp-text stores after a swap — so flushRecheck never mistakes our own
   // written translation for changed page text.
   function currentBlockSource(el: HTMLElement): string {
-    return renderMode === 'translation-only'
-      ? buildMarkedSource(getTranslatableRuns(el, extractOpts.skipSelectors).map((r) => r.data))
-      : getVisibleText(el, extractOpts.skipSelectors).trim()
+    return buildBlockSource(el, extractOpts.skipSelectors)
   }
 
+  //
+  // Mode-independent on purpose. The two modes must derive the same string for
+  // the same DOM, or a mode switch re-requests the whole page; and in
+  // translation-only the runs hold translated text after a swap, so the token
+  // has to be recomputed the same way it was seeded or recheck loops.
   function translateBatch(batch: TranslatableBlock[]) {
     const t = debugTime(`translateBatch(n=${batch.length})`)
     for (const block of batch) {
