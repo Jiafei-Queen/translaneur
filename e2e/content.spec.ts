@@ -364,8 +364,22 @@ test('translation-only replaces text in place preserving links', async ({ contex
   await page.waitForLoadState('domcontentloaded')
 
   await configureMockProvider(page, baseURL)
+  // Hold the home paragraph's response open so the in-flight state is
+  // observable: without a delay the mock resolves before the first poll and a
+  // presence assertion would pass trivially on a zero count.
+  await page.request.post(`${baseURL}/mock/delays`, {
+    data: { delays: [{ text: 'This is the home page for testing translation.', ms: 3000 }] },
+  })
   await setSettings(context, { renderMode: 'translation-only' })
   await startTranslation(page)
+
+  // Same per-block ring as bilingual, appended after the source, which stays
+  // readable throughout.
+  const ring = page.locator('.imp-translate-result.imp-translate-loading')
+  await expect.poll(async () => ring.count(), { timeout: 15000 }).toBeGreaterThan(0)
+  await expect(page.locator('p').first()).toContainText(
+    'This is the home page for testing translation.',
+  )
 
   // The two body links are one extracted block with three runs
   // ("Go to Page 2", "\n  ", "Open PDF"). The mock echoes the marked source
@@ -378,10 +392,14 @@ test('translation-only replaces text in place preserving links', async ({ contex
   await expect(page.locator('p').first()).toContainText(
     '[翻译] This is the home page for testing translation.',
   )
-  await expect(page.locator('.imp-translate-result')).toHaveCount(0)
+  // The ring drains once every block has settled.
+  await expect(page.locator('.imp-translate-loading')).toHaveCount(0)
 
   await stopTranslation(page)
   await expect(page.locator('#link-page2')).toHaveText('Go to Page 2', { timeout: 5000 })
   await expect(page.locator('#link-pdf')).toHaveText('Open PDF')
-  await expect(page.locator('.imp-translate-result')).toHaveCount(0)
+  // Teardown leaves no injected nodes of any kind behind.
+  await expect(page.locator('.imp-translate-result')).toHaveCount(0, { timeout: 5000 })
+  await expect(page.locator('.imp-translate-spacer')).toHaveCount(0, { timeout: 5000 })
+  await expect(page.locator('.imp-translate-br')).toHaveCount(0, { timeout: 5000 })
 })

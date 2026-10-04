@@ -1,4 +1,4 @@
-import { RESULT_CLASS, PROCESSED_ATTR, getTranslatableRuns, swapTextNodes, type TranslatableBlock } from './dom'
+import { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, getTranslatableRuns, swapTextNodes, type TranslatableBlock } from './dom'
 import { buildMarkedSource, splitTranslation } from './align'
 import type { RenderMode } from './storage'
 import { LANGUAGES_SORTED } from './languages'
@@ -191,6 +191,16 @@ function findTrailingNonTextRef(target: HTMLElement): Node | null {
   return ref
 }
 
+// The gap between a short block's source and the injected ring. A span, not a
+// bare text node: only an element can carry SPACER_CLASS, and both the run
+// collector and the teardown skip on class.
+function createSpacer(): HTMLElement {
+  const spacer = document.createElement('span')
+  spacer.className = SPACER_CLASS
+  spacer.textContent = ' '
+  return spacer
+}
+
 export function injectLoading(blocks: TranslatableBlock[]) {
   ensureStyles()
 
@@ -258,7 +268,7 @@ export function injectLoading(blocks: TranslatableBlock[]) {
     wrapper.setAttribute('translate', 'no')
 
     if (isShort) {
-      target.insertBefore(document.createTextNode(' '), ref)
+      target.insertBefore(createSpacer(), ref)
       target.insertBefore(wrapper, ref)
     } else if (needsBr) {
       const br = document.createElement('br')
@@ -280,7 +290,10 @@ export function repositionTranslation(element: HTMLElement, expectedText: string
 
   const prev = wrapper.previousSibling
   wrapper.remove()
-  if (prev?.nodeType === Node.ELEMENT_NODE && (prev as Element).classList.contains(BR_CLASS)) {
+  if (
+    prev?.nodeType === Node.ELEMENT_NODE &&
+    ((prev as Element).classList.contains(BR_CLASS) || (prev as Element).classList.contains(SPACER_CLASS))
+  ) {
     prev.parentElement?.removeChild(prev)
   } else if (prev?.nodeType === Node.TEXT_NODE && prev.textContent === ' ') {
     prev.parentElement?.removeChild(prev)
@@ -289,7 +302,7 @@ export function repositionTranslation(element: HTMLElement, expectedText: string
   const isShort = expectedText.length <= SHORT_TEXT_THRESHOLD
   const ref = findTrailingNonTextRef(correctTarget)
   if (isShort) {
-    correctTarget.insertBefore(document.createTextNode(' '), ref)
+    correctTarget.insertBefore(createSpacer(), ref)
   } else if (!lastVisibleChildIsBlockLike(correctTarget, ref)) {
     const br = document.createElement('br')
     br.className = BR_CLASS
@@ -305,15 +318,27 @@ export interface RenderOpts {
 
 // Removes an injected wrapper plus the spacer (`<br>` or single space) put in
 // front of it. The spacer is always our own node: trailing page whitespace
-// sits after the wrapper, never before it (see findTrailingNonTextRef).
+// sits after the wrapper, never before it (see findTrailingNonTextRef). The
+// text-node arm predates the marked `<span>` and only matters for wrappers
+// injected before that change.
 function removeInjectedWrapper(wrapper: Element): void {
   const prev = wrapper.previousSibling
-  if (prev?.nodeType === Node.ELEMENT_NODE && (prev as Element).classList.contains(BR_CLASS)) {
+  if (
+    prev?.nodeType === Node.ELEMENT_NODE &&
+    ((prev as Element).classList.contains(BR_CLASS) || (prev as Element).classList.contains(SPACER_CLASS))
+  ) {
     prev.remove()
   } else if (prev?.nodeType === Node.TEXT_NODE && prev.textContent === ' ') {
     prev.remove()
   }
   wrapper.remove()
+}
+
+// Tears down every wrapper we injected in this block, spacer included. Called
+// on the paths that keep the source instead of writing a translation, so a ring
+// is never left spinning with nothing behind it.
+function clearInjectedWrappers(element: HTMLElement): void {
+  element.querySelectorAll(`.${RESULT_CLASS}`).forEach(removeInjectedWrapper)
 }
 
 export function replaceWithTranslation(
@@ -326,12 +351,20 @@ export function replaceWithTranslation(
       const { element, text } = blocks[i]
       const translated = translations[i]
       const runs = getTranslatableRuns(element, opts.skipSelectors)
-      if (runs.length === 0) continue
+      if (runs.length === 0) {
+        // Nothing to write into; a ring here would spin with no text behind it.
+        clearInjectedWrappers(element)
+        continue
+      }
       // Stale: the DOM moved under the in-flight request. The recheck pass
-      // owns recovery via the token mismatch this leaves behind.
+      // owns recovery via the token mismatch this leaves behind. The ring stays
+      // up meanwhile — the block is still in flight as far as the user knows.
       if (buildMarkedSource(runs.map((r) => r.data)) !== text) continue
-      if (!translated) continue
-      element.querySelectorAll(`.${RESULT_CLASS}`).forEach(removeInjectedWrapper)
+      if (!translated) {
+        clearInjectedWrappers(element)
+        continue
+      }
+      clearInjectedWrappers(element)
       const { pieces, exact } = splitTranslation(translated, runs.map((r) => r.data))
       // Fallback cuts at offsets unrelated to the run boundaries, so a block
       // with any descendant element (link, inline styling) would get a link's
@@ -410,13 +443,14 @@ export function replaceWithError(
       ensureStyles()
       let wrapper = element.querySelector(`.${RESULT_CLASS}`) as HTMLElement | null
       if (!wrapper) {
-        // No loading wrapper exists in this mode (the source text is the
-        // placeholder) — anchor a small error chip at the block end using the
-        // same geometry as injectLoading.
+        // Fallback for a block that failed without ever passing through
+        // injectLoading (extraction or filtering dropped it before the ring
+        // was injected). Anchor the error chip at the block end using the same
+        // geometry as injectLoading.
         const target = findInjectionPoint(element)
         const ref = findTrailingNonTextRef(target)
         if (text.length <= SHORT_TEXT_THRESHOLD) {
-          target.insertBefore(document.createTextNode(' '), ref)
+          target.insertBefore(createSpacer(), ref)
         } else if (!lastVisibleChildIsBlockLike(target, ref)) {
           const br = document.createElement('br')
           br.className = BR_CLASS

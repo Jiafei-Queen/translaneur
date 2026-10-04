@@ -8,7 +8,7 @@ import {
   showToastBar,
   type ToastBarOptions,
 } from './render'
-import { extractBlocks, markTranslated, type TranslatableBlock } from './dom'
+import { clearTranslations, extractBlocks, getTranslatableRuns, markTranslated, type TranslatableBlock } from './dom'
 import { buildMarkedSource } from './align'
 
 describe('render', () => {
@@ -323,10 +323,11 @@ describe('render', () => {
 
     const font = block.querySelector('font.imp-translate-result')!
     expect(font.parentElement).toBe(block)
-    // Still short text → still uses space, not br
+    // Still short text → still uses a space, not a br. The separator is a
+    // tagged span, not a bare text node, so that it is identifiable as ours.
     expect(block.querySelector('br.imp-translate-br')).toBeNull()
-    expect(font.previousSibling?.nodeType).toBe(Node.TEXT_NODE)
     expect(font.previousSibling?.textContent).toBe(' ')
+    expect((font.previousSibling as Element).classList).toContain('imp-translate-spacer')
   })
 
   it('should inject translation before trailing image, not after it (short text)', () => {
@@ -699,6 +700,82 @@ describe('translation-only rendering', () => {
     ;(p.firstChild as Text).data = 'Moved '
     replaceWithTranslation(blocks, ['⟦1⟧点击⟦2⟧这里⟦3⟧立刻'], { renderMode: 'translation-only' })
     expect(p.textContent).toBe('Moved here now')
+  })
+
+  it('shows a loading ring without treating the spacer as page text', () => {
+    // Short block: injectLoading injects a spacer to separate the ring from
+    // the source. The spacer is a layout artefact, so it must never enter the
+    // run list — otherwise the staleness gate rejects the write, the ring never
+    // clears, and the translation is dropped.
+    document.body.innerHTML = '<p>Hi</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const text = buildMarkedSource(['Hi'])
+    const blocks = [{ element: p, text }] as TranslatableBlock[]
+
+    injectLoading(blocks)
+    expect(p.querySelector('font.imp-translate-result.imp-translate-loading')).not.toBeNull()
+    // The source stays readable behind the ring.
+    expect(p.textContent).toContain('Hi')
+    expect(getTranslatableRuns(p).map((r) => r.data)).toEqual(['Hi'])
+
+    replaceWithTranslation(blocks, ['你好'], { renderMode: 'translation-only' })
+    expect(p.textContent).toBe('你好')
+    expect(p.querySelector('font')).toBeNull()
+  })
+
+  it('shows a loading ring on a long block without losing the translation', () => {
+    // Past SHORT_TEXT_THRESHOLD the <br> branch runs instead of the spacer;
+    // this guards the spacer change against regressing it.
+    const long = 'A'.repeat(60)
+    document.body.innerHTML = `<p>${long}</p>`
+    const p = document.querySelector('p') as HTMLElement
+    const blocks = [{ element: p, text: buildMarkedSource([long]) }] as TranslatableBlock[]
+
+    injectLoading(blocks)
+    expect(p.querySelector('font.imp-translate-result.imp-translate-loading')).not.toBeNull()
+
+    replaceWithTranslation(blocks, ['长'.repeat(60)], { renderMode: 'translation-only' })
+    expect(p.textContent).toBe('长'.repeat(60))
+    expect(p.querySelector('font')).toBeNull()
+  })
+
+  it('clears the ring when the translation comes back empty', () => {
+    // `!translated` early-continues before the wrapper removal; the ring would
+    // otherwise spin forever.
+    document.body.innerHTML = '<p>Hi</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const blocks = [{ element: p, text: buildMarkedSource(['Hi']) }] as TranslatableBlock[]
+    injectLoading(blocks)
+
+    replaceWithTranslation(blocks, [''], { renderMode: 'translation-only' })
+    expect(p.querySelector('.imp-translate-loading')).toBeNull()
+    expect(p.textContent).toContain('Hi')
+  })
+
+  it('clears the ring when alignment fails inside a block with inline elements', () => {
+    // The `!exact && element.querySelector('*')` skip keeps the source; the
+    // ring must still be torn down.
+    const { p, blocks } = runsFixture()
+    p.setAttribute('data-imp-text', blocks[0]!.text)
+    injectLoading(blocks)
+    expect(p.querySelector('.imp-translate-loading')).not.toBeNull()
+
+    replaceWithTranslation(blocks, ['一二三四五六'], { renderMode: 'translation-only' })
+    expect(p.querySelector('.imp-translate-loading')).toBeNull()
+    expect(p.textContent).toContain('Click here now')
+  })
+
+  it('leaves the block exactly as it was when translations are cleared', () => {
+    // Stopping mid-flight removes the ring and its spacer; nothing may survive
+    // as stray page text.
+    document.body.innerHTML = '<p>Hi</p>'
+    const p = document.querySelector('p') as HTMLElement
+    const childCount = p.childNodes.length
+    injectLoading([{ element: p, text: buildMarkedSource(['Hi']) }] as TranslatableBlock[])
+
+    clearTranslations(document.body)
+    expect(p.textContent).toBe('Hi')
+    expect(p.childNodes.length).toBe(childCount)
   })
 
   it('keeps the source and inserts an error chip with retry on failure', () => {

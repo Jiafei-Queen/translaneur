@@ -79,9 +79,11 @@ visible can be broken there, so dropping the translation would be a pure loss.
 
 ## Invariants worth preserving
 
-- Translation-only writes into the **existing** text nodes. It never clones,
-  reparents, or replaces elements, which is what keeps listeners, attributes,
-  and CSS animations intact.
+- Once settled, translation-only writes into the **existing** text nodes. It
+  never clones, reparents, or replaces elements, which is what keeps listeners,
+  attributes, and CSS animations intact. The in-flight window appends the
+  loading ring (and, on short blocks, its spacer) *after* the source rather
+  than replacing anything, so that window is purely additive too.
 - The staleness token must equal what the block would compute *now* that the
   runs hold translated text. Writing the pre-translation value breaks recheck.
 - `restoreTextNodes` only reverts a node whose current content still equals what

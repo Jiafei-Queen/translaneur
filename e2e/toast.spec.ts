@@ -197,8 +197,12 @@ test('toast display select switches render mode on mobile', async ({ context, ba
 
   await displayGroup.locator('[data-value="translation-only"]').click()
 
-  await expect(page.locator('.imp-translate-result')).toHaveCount(0, { timeout: 15000 })
+  // Switching modes restarts translation, so the ring is injected in
+  // translation-only too. What matters is that it drains: the settled state
+  // carries no wrapper, only the translated text written in place.
   await expect(page.locator('p').first()).toContainText('[翻译]', { timeout: 15000 })
+  await expect(page.locator('.imp-translate-loading')).toHaveCount(0, { timeout: 15000 })
+  await expect(page.locator('.imp-translate-result')).toHaveCount(0, { timeout: 15000 })
 })
 
 // The toast draws its own CSS rather than using the ghost Button, and carries

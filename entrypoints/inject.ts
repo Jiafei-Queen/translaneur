@@ -10,6 +10,7 @@ import {
   type ExtractOptions,
   PROCESSED_ATTR,
   RESULT_CLASS,
+  SPACER_CLASS,
   getTranslatableRuns,
   getVisibleText,
   needsBlankLineSplit,
@@ -177,9 +178,10 @@ export default defineUnlistedScript(() => {
     blocks = await filterByLanguage(blocks)
     if (blocks.length === 0) return
 
-    // translation-only keeps the source visible while loading — no spinner
-    // wrapper, zero layout shift when the pieces land.
-    if (renderMode === 'bilingual') injectLoading(blocks)
+    // Both modes share the ring: translation-only keeps the source visible
+    // underneath it, so the wrapper is purely additive and costs no layout
+    // shift when the translation lands in place.
+    injectLoading(blocks)
     discardSelfMutations()
     translateBatch(blocks)
   }
@@ -422,6 +424,7 @@ export default defineUnlistedScript(() => {
         const addedEl = node as Element
         if (addedEl.classList?.contains(RESULT_CLASS)) continue
         if (addedEl.classList?.contains('imp-translate-br')) continue
+        if (addedEl.classList?.contains(SPACER_CLASS)) continue
         if (addedEl.hasAttribute('data-imp-wrap')) continue
         if (addedEl.hasAttribute(PROCESSED_ATTR)) continue
         if (addedEl.closest(`[${PROCESSED_ATTR}]`)) continue

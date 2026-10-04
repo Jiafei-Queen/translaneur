@@ -46,6 +46,9 @@ const EDITOR_SELECTOR = [
 ].join(',')
 
 const RESULT_CLASS = 'imp-translate-result'
+// Layout artefact injected next to the loading ring, never page text. Exported
+// so render.ts tags the node it creates and the two modules cannot drift.
+const SPACER_CLASS = 'imp-translate-spacer'
 const PROCESSED_ATTR = 'data-imp-translated'
 const WRAP_ATTR = 'data-imp-wrap'
 const OVERSIZED_BLOCK_THRESHOLD = 8000
@@ -685,6 +688,7 @@ export function getTranslatableRuns(element: HTMLElement, skipSelectors?: string
     const el = node as HTMLElement
     if (SKIP_TAGS.has(el.tagName.toLowerCase())) return
     if (el.classList.contains(RESULT_CLASS) || el.classList.contains('imp-translate-br')) return
+    if (el.classList.contains(SPACER_CLASS)) return
     if (el.classList.contains('notranslate')) return
     if (el.getAttribute('translate') === 'no') return
     if (el.isContentEditable) return
@@ -734,6 +738,7 @@ export function clearTranslations(root: Element = document.body) {
     restoreTextNodes(scope)
     scope.querySelectorAll(`.${RESULT_CLASS}`).forEach((el) => el.remove())
     scope.querySelectorAll('.imp-translate-br').forEach((el) => el.remove())
+    scope.querySelectorAll(`.${SPACER_CLASS}`).forEach((el) => el.remove())
     scope.querySelectorAll(`[${PROCESSED_ATTR}]`).forEach((el) => {
       el.removeAttribute(PROCESSED_ATTR)
       el.removeAttribute('data-imp-text')
@@ -758,4 +763,4 @@ export function clearTranslations(root: Element = document.body) {
   root.removeAttribute('data-imp-noop')
 }
 
-export { RESULT_CLASS, PROCESSED_ATTR, getVisibleText }
+export { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, getVisibleText }
