@@ -49,6 +49,7 @@ Copyright (C) 2026 rxliuli (original Imp Translate). Full license text in [LICEN
 - Supports Google, Microsoft, Imp Credits, and OpenAI-compatible translation providers
 - A user glossary pins the rendering of a term everywhere it appears, so proper nouns and product names stop drifting between blocks — see [docs/glossary.md](docs/glossary.md)
 - Smart DOM walker: only translates visible content, handles SPAs, lazy-loaded content, and dynamic text changes
+- Input hints too: a `placeholder` on inputs and textareas is translated in place (a form control has no room for a bilingual line) and restored when translation stops; `value`, `aria-label`, and `title` are left alone
 - Translations are cached per text and language, so a second pass over the same page costs nothing; "Re-translate" in the popup (↻ in the mobile bar) forces a fresh pass on demand — see [docs/cache.md](docs/cache.md)
 - Site-specific rules for skipping or targeting content areas
 - Configurable shortcuts from the options page: `Alt+T` toggles translation, `Alt+R` re-translates the page from scratch (ignoring the cache) — see [docs/hotkey.md](docs/hotkey.md)
@@ -88,6 +89,12 @@ entity.*            — match any TLD via Public Suffix List (e.g. google.* cove
 ```
 
 Users can add custom rules via Developer Mode in the options page.
+
+Page chrome is exempt from the include scope: elements inside `<header>`,
+`<nav>`, `<footer>`, `<aside>`, or an ARIA landmark role
+(`banner`/`navigation`/`contentinfo`/`complementary`) are always translated,
+even when they fall outside an include rule. A skip rule still wins over them —
+see `CHROME_SELECTOR` in `lib/dom.ts`.
 
 For per-site coverage status (which top-50 sites have explicit rules vs rely on the default DOM walker), see [`COMPATIBILITY.md`](./COMPATIBILITY.md).
 

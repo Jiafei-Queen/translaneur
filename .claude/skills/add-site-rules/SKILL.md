@@ -26,6 +26,8 @@ UGC is a useful proxy ("UGC sites tend to be component-based") but Wikipedia is 
 
 **The two modes compose**. On an include-mode site, add `##` rules to remove unwanted UI **inside** the include subtree (e.g. `youtube.com##yt-content-metadata-view-model` strips channel/views/age out of the `yt-lockup-view-model` include). The walker first narrows to includes, then applies skips within them.
 
+**Semantic page chrome is always in scope** — `header`, `nav`, `footer`, `aside` and their ARIA roles translate even on include-mode sites, because navigation text is what users expect translated (`CHROME_SELECTOR` in `lib/dom.ts`). A matching `##` skip rule still wins, which is the way to keep a chrome region untranslated.
+
 ## Workflow
 
 1. **Read current rules**. Open `lib/rules.txt` and find the section for this domain.
@@ -72,7 +74,7 @@ UGC is a useful proxy ("UGC sites tend to be component-based") but Wikipedia is 
 
 - **`activeTab` selectors with dynamic IDs**: Twitter/X, Reddit and similar SPAs use UUID/numeric suffixes on test-ids. Always check whether the prefix is stable across reloads before committing to `[data-testid^="..."]`.
 - **Over-broad include rules**: `google.*#+#main` would cover Search, Drive, Docs, Gmail, etc. — and on pages without `main` it would suppress translation entirely. Scope subdomains explicitly when the site has multiple products (e.g. `www.google.*` vs `mail.google.*`).
-- **Skip rules on include-only sites are no-ops**: if the domain only has `#+#` rules, the walker never reaches the elements a `##` rule would skip. Either drop the include rules or move the unwanted region to a more specific include selector.
+- **Skip rules on include-only sites are no-ops**: if the domain only has `#+#` rules, the walker never reaches the elements a `##` rule would skip. Either drop the include rules or move the unwanted region to a more specific include selector. (Semantic chrome is the exception: it is always in scope, so a `##` rule can exclude it.)
 - **CSP-restricted pages**: some sites (banking, GitHub Enterprise) block extension content scripts entirely. If `javascript_tool` works but the extension still doesn't translate, it's not a rules problem — back out and tell the user.
 
 ## Reference files

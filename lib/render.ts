@@ -1,4 +1,4 @@
-import { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, buildBlockSource, trimmedRuns, swapTextNodes, type TranslatableBlock } from './dom'
+import { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, buildBlockSource, buildAttributeSource, trimmedRuns, swapTextNodes, type TranslatableBlock } from './dom'
 import { buildMarkedSource, isPassthroughRun, splitTranslation, stripMarkers } from './align'
 import type { RenderMode } from './storage'
 import { LANGUAGES_SORTED } from './languages'
@@ -356,6 +356,34 @@ export function replaceWithTranslation(
   translations: string[],
   opts?: RenderOpts,
 ) {
+  // Attribute hints have no runs to split the response into and no room for a
+  // bilingual line: written through in both modes; text blocks continue below.
+  const textBlocks: TranslatableBlock[] = []
+  const textTranslations: string[] = []
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i]!
+    const attr = block.attribute
+    if (attr) {
+      const source = stripMarkers(block.text)
+      const plain = (translations[i] ?? '').trim()
+      if (!plain || plain.toLowerCase() === source.toLowerCase()) {
+        // The page's own hint already says it; leave it untouched.
+        block.element.setAttribute('data-imp-noop', '')
+        continue
+      }
+      block.element.setAttribute(attr, plain)
+      block.element.setAttribute(
+        'data-imp-text',
+        buildAttributeSource(block.element, attr),
+      )
+      continue
+    }
+    textBlocks.push(block)
+    textTranslations.push(translations[i] ?? '')
+  }
+  blocks = textBlocks
+  translations = textTranslations
+
   if (opts?.renderMode === 'translation-only') {
     for (let i = 0; i < blocks.length; i++) {
       const { element, text } = blocks[i]
@@ -474,7 +502,10 @@ export function replaceWithError(
   onRetry: (blocks: TranslatableBlock[]) => void,
   opts?: RenderOpts,
 ) {
-  for (const { element, text } of blocks) {
+  for (const { element, text, attribute } of blocks) {
+    // An attribute hint has no slot for an error chip and nothing a retry
+    // could render into: keep the page's own hint and stay silent.
+    if (attribute) continue
     if (opts?.renderMode === 'translation-only') {
       ensureStyles()
       let wrapper = element.querySelector(`.${RESULT_CLASS}`) as HTMLElement | null

@@ -11,7 +11,9 @@ import {
   PROCESSED_ATTR,
   RESULT_CLASS,
   SPACER_CLASS,
+  HINT_ATTR,
   buildBlockSource,
+  buildAttributeSource,
   needsBlankLineSplit,
 } from '@/lib/dom'
 import {
@@ -108,6 +110,8 @@ export default defineUnlistedScript(() => {
   // translation-only the runs hold translated text after a swap, so the token
   // has to be recomputed the same way it was seeded or recheck loops.
   function currentBlockSource(el: HTMLElement): string {
+    const attr = el.getAttribute('data-imp-attr')
+    if (attr) return buildAttributeSource(el, attr)
     return buildBlockSource(el, extractOpts.skipSelectors)
   }
 
@@ -161,7 +165,9 @@ export default defineUnlistedScript(() => {
       if (b.element.hasAttribute(PROCESSED_ATTR)) return false
       // An already-translated ancestor owns this text — its translation
       // covers it, and a nested mark would race it for the result element.
-      if (b.element.parentElement?.closest(`[${PROCESSED_ATTR}]`)) return false
+      // An attribute hint competes for no text nodes and gets no result
+      // element, so an ancestor's translation neither covers it nor races it.
+      if (!b.attribute && b.element.parentElement?.closest(`[${PROCESSED_ATTR}]`)) return false
       if (seen.has(b.element)) return false
       seen.add(b.element)
       return true
@@ -170,16 +176,33 @@ export default defineUnlistedScript(() => {
     // later (e.g. React swapping the inner span of a pending <li>). Keep the
     // outermost block; its text includes the descendant's.
     blocks = blocks.filter(
-      (b) => !blocks.some((o) => o !== b && o.element.contains(b.element)),
+      (b) =>
+        b.attribute ||
+        !blocks.some((o) => o !== b && o.element.contains(b.element)),
     )
     if (blocks.length === 0) return
 
     for (const block of blocks) {
+      if (block.attribute) {
+        // A hint the page removed while the block queued is dropped unmarked,
+        // so a later rescan can pick it up again if it comes back.
+        const current = buildAttributeSource(block.element, block.attribute)
+        if (!current) continue
+        if (current !== block.text) block.text = current
+        markTranslated(block.element)
+        block.element.setAttribute('data-imp-attr', block.attribute)
+        block.element.setAttribute(
+          'data-imp-attr-orig',
+          block.element.getAttribute(block.attribute) ?? '',
+        )
+        block.element.setAttribute('data-imp-text', block.text)
+        continue
+      }
       // The text was captured at extraction time; on streaming pages it may
       // have grown while the block waited in the visibility/batch queues.
       // Translate what is in the DOM now, not the stale snapshot — without
-      // this, the growth mutation predates the mark, so no recheck would
-      // ever repair the truncated translation.
+      // this, the growth mutation predates the mark, so a recheck would
+      // never repair the truncated translation.
       const current = currentBlockSource(block.element)
       if (current && current !== block.text) block.text = current
       markTranslated(block.element)
@@ -191,8 +214,9 @@ export default defineUnlistedScript(() => {
 
     // Both modes share the ring: translation-only keeps the source visible
     // underneath it, so the wrapper is purely additive and costs no layout
-    // shift when the translation lands in place.
-    injectLoading(blocks)
+    // shift when the translation lands in place. Attribute hints have nowhere
+    // to put a ring — a form control renders its value, not its children.
+    injectLoading(blocks.filter((b) => !b.attribute))
     discardSelfMutations()
     translateBatch(blocks)
   }
@@ -330,6 +354,37 @@ export default defineUnlistedScript(() => {
   const pendingRecheck = new Set<Element>()
 
   async function retranslateElement(el: Element, newText: string) {
+    // An attribute hint changed under our translation: retranslate the value
+    // in the DOM now and write it back — a placeholder is a single string.
+    const attr = el.getAttribute('data-imp-attr')
+    if (attr) {
+      if (!newText) return
+      el.setAttribute('data-imp-text', newText)
+      const block: TranslatableBlock = {
+        element: el as HTMLElement,
+        text: newText,
+        attribute: attr,
+      }
+      const filtered = await filterByLanguage([block])
+      if (filtered.length === 0) return
+      try {
+        const translated = await messager.sendMessage('translate', {
+          text: newText,
+          targetLang,
+        })
+        if (!isTranslating) return
+        // A newer recheck may have superseded this one while awaiting.
+        if (el.getAttribute('data-imp-text') !== newText) return
+        replaceWithTranslation([block], [translated], {
+          renderMode,
+          skipSelectors: extractOpts.skipSelectors,
+        })
+        discardSelfMutations()
+      } catch {
+        // keep the current hint on error (matches the text-block behavior)
+      }
+      return
+    }
     // The element was translated as one block, but its new text has blank-line
     // paragraph breaks in a pre-wrap context (x.com "Show more" on a tweet
     // whose truncated text had none). The walker would have segmented it, so
@@ -430,6 +485,13 @@ export default defineUnlistedScript(() => {
       if (translated) {
         pendingRecheck.add(translated as Element)
       }
+      if (mutation.type === 'attributes' && target instanceof Element) {
+        // A placeholder set after the walk. Already-translated elements are
+        // queued for recheck above; extraction behind PROCESSED_ATTR is a no-op.
+        const extracted = extractBlocks(target, extractOpts)
+        if (extracted.length > 0) newBlocks.push(...extracted)
+        continue
+      }
       for (const node of mutation.addedNodes) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue
         const addedEl = node as Element
@@ -477,13 +539,28 @@ export default defineUnlistedScript(() => {
     if (shadowObservers.has(root)) return
     if (!isTranslating) return
     const obs = new MutationObserver(handleMutations)
-    obs.observe(root, { childList: true, subtree: true, characterData: true })
+    // attributes: a placeholder set after the walk carries no childList
+    // mutation. Filtered to HINT_ATTR so attribute churn never reaches this
+    // handler; our own writes are dropped by discardSelfMutations.
+    obs.observe(root, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: [HINT_ATTR],
+    })
     shadowObservers.set(root, obs)
   }
 
   function startObserver() {
     observer = new MutationObserver(handleMutations)
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: [HINT_ATTR],
+    })
   }
 
   function startUrlWatcher() {

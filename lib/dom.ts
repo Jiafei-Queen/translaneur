@@ -32,7 +32,19 @@ const CONTAINER_TAGS = new Set([
   'details', 'summary', 'legend',
 ])
 
-const SKIP_CONTAINERS = new Set(['nav', 'footer'])
+// Page chrome — top bar, navigation, sidebar, footer. Under an include rule
+// only in-scope elements are extracted (uBO isolate semantics), but chrome is
+// navigation text the user expects translated: these semantic containers and
+// their ARIA roles always count as in scope. Site excludes still win.
+const CHROME_SELECTOR =
+  'header, nav, footer, aside, [role="banner"], [role="navigation"], [role="contentinfo"], [role="complementary"]'
+
+// Page-authored hint text that lives in an attribute, not a text node. Only
+// `placeholder` qualifies: a submit input's `value` can be a payload the
+// server reads, an `aria-label` value anchors selector-based site rules
+// (rules.txt matches `div[aria-label="Grok"]`), and `title` only shows on hover.
+const HINT_ATTR_TAGS = new Set(['input', 'textarea'])
+export const HINT_ATTR = 'placeholder'
 
 const EDITOR_SELECTOR = [
   '.RichEditor-root:has([contenteditable="true"])',
@@ -126,6 +138,11 @@ function segmentRunByBrBr(run: Node[], splitOnBlankLines = false): Node[][] {
 export interface TranslatableBlock {
   element: HTMLElement
   text: string
+  /**
+   * The block is this attribute's value (an input/textarea `placeholder`)
+   * rather than the element's text nodes.
+   */
+  attribute?: string
 }
 
 export interface ExtractOptions {
@@ -159,27 +176,47 @@ function closestThroughShadow(el: Element, selector: string): Element | null {
   return null
 }
 
-function shouldSkip(el: Element, opts?: ExtractOptions): boolean {
-  if (opts?.includeSelectors && opts.includeSelectors.length > 0) {
-    const inside = opts.includeSelectors.some((s) => closestThroughShadow(el, s))
-    if (!inside) {
-      const contains = opts.includeSelectors.some((s) => el.querySelector(s))
-      if (!contains && !hasShadowDescendant(el)) return true
-    }
-  }
+// The include gate (uBO isolate semantics), widened for page chrome: in scope
+// when an include selector or CHROME_SELECTOR owns the element or its subtree —
+// the subtree clause only lets the walk descend into wrappers that lead to
+// scoped content. True when there is no active include rule.
+function inIncludeScope(el: Element, opts?: ExtractOptions): boolean {
+  if (!opts?.includeSelectors || opts.includeSelectors.length === 0) return true
+  if (closestThroughShadow(el, CHROME_SELECTOR)) return true
+  if (opts.includeSelectors.some((s) => closestThroughShadow(el, s))) return true
+  if (el.querySelector(CHROME_SELECTOR)) return true
+  return opts.includeSelectors.some((s) => el.querySelector(s))
+}
+
+// Include/skip-selector gates, shared by walk decisions and attribute-hint
+// extraction. The rest of shouldSkip is about the element's content (SKIP_TAGS,
+// editors, our own nodes), which a placeholder hint bypasses.
+function passesSkipRules(el: Element, opts?: ExtractOptions): boolean {
+  if (!inIncludeScope(el, opts) && !hasShadowDescendant(el)) return false
   if (opts?.skipSelectors) {
     for (const s of opts.skipSelectors) {
-      if (el.matches(s)) return true
+      if (el.matches(s)) return false
     }
   }
+  return true
+}
+
+// Tag-independent gates: not the page saying "don't translate", not an editor
+// we must not write into, not ours, not already handled.
+function passesElementGates(el: Element): boolean {
+  if (el.classList.contains('notranslate')) return false
+  if (el.getAttribute('translate') === 'no') return false
+  if ((el as HTMLElement).isContentEditable) return false
+  if (el.closest(EDITOR_SELECTOR)) return false
+  if (el.classList.contains(RESULT_CLASS)) return false
+  if (el.hasAttribute(PROCESSED_ATTR)) return false
+  return true
+}
+
+function shouldSkip(el: Element, opts?: ExtractOptions): boolean {
+  if (!passesSkipRules(el, opts)) return true
   if (SKIP_TAGS.has(el.tagName.toLowerCase())) return true
-  if (el.classList.contains('notranslate')) return true
-  if (el.getAttribute('translate') === 'no') return true
-  if ((el as HTMLElement).isContentEditable) return true
-  if (el.closest(EDITOR_SELECTOR)) return true
-  if (el.classList.contains(RESULT_CLASS)) return true
-  if (el.hasAttribute(PROCESSED_ATTR)) return true
-  return false
+  return !passesElementGates(el)
 }
 
 function isHidden(el: HTMLElement): boolean {
@@ -499,13 +536,7 @@ export function extractBlocks(root: Element = document.body, opts?: ExtractOptio
 
   function tryExtract(node: Element): boolean {
     if (isHidden(node as HTMLElement)) return false
-    if (opts?.includeSelectors && opts.includeSelectors.length > 0) {
-      const inside = opts.includeSelectors.some((s) => closestThroughShadow(node, s))
-      if (!inside) {
-        const contains = opts.includeSelectors.some((s) => node.querySelector(s))
-        if (!contains) return false
-      }
-    }
+    if (!inIncludeScope(node, opts)) return false
     // One traversal yields both the visible text (for the eligibility filters)
     // and the runs (for the canonical payload). Walking twice would double the
     // getComputedStyle calls the extraction budget guards — see collectText.
@@ -524,6 +555,23 @@ export function extractBlocks(root: Element = document.body, opts?: ExtractOptio
     return false
   }
 
+  // An input/textarea's hint text lives in `placeholder`: a single run with no
+  // text nodes to write into. Same gates and eligibility filters as a text block.
+  function tryExtractAttribute(node: Element): boolean {
+    if (!HINT_ATTR_TAGS.has(node.tagName.toLowerCase())) return false
+    if (!passesSkipRules(node, opts)) return false
+    if (!passesElementGates(node)) return false
+    if (isHidden(node as HTMLElement)) return false
+    const hint = node.getAttribute(HINT_ATTR)?.trim()
+    if (!hint || NO_LETTER_RE.test(hint) || ASCII_SHORT_RE.test(hint)) return false
+    blocks.push({
+      element: node as HTMLElement,
+      text: buildAttributeSource(node, HINT_ATTR),
+      attribute: HINT_ATTR,
+    })
+    return true
+  }
+
   // Read-only counterpart of tryExtract for the multi-node wrapper case: decide
   // eligibility and compute the block text from the segment nodes *in place*,
   // create the <font> wrapper detached (cheap, no layout impact), and record the
@@ -531,12 +579,17 @@ export function extractBlocks(root: Element = document.body, opts?: ExtractOptio
   // on `parent` rather than the wrapper — equivalent, since the wrapper is a
   // plain <font> directly under `parent` that never matches an include selector.
   function deferWrap(parent: Element, seg: Node[]) {
-    if (opts?.includeSelectors && opts.includeSelectors.length > 0) {
-      const inside = opts.includeSelectors.some((s) => closestThroughShadow(parent, s))
-      if (!inside) {
-        const contains = seg.some((n) => n.nodeType === Node.ELEMENT_NODE && opts.includeSelectors!.some((s) => (n as Element).matches(s) || (n as Element).querySelector(s)))
-        if (!contains) return
-      }
+    if (!inIncludeScope(parent, opts)) {
+      // The parent can sit outside the scope while a segment element carries
+      // it — a wrapper whose own child matches an include selector.
+      const inSeg = seg.some(
+        (n) =>
+          n.nodeType === Node.ELEMENT_NODE &&
+          opts?.includeSelectors?.some(
+            (s) => (n as Element).matches(s) || (n as Element).querySelector(s),
+          ),
+      )
+      if (!inSeg) return
     }
     // The segment nodes move into the wrapper only in the write phase, so the
     // runs are collected from `seg` itself — reading them off the empty
@@ -630,11 +683,14 @@ export function extractBlocks(root: Element = document.body, opts?: ExtractOptio
   }
 
   function walk(node: Element) {
+    // Before shouldSkip: that gate drops <textarea> wholesale (its inner text
+    // is the user's draft), which must not take its placeholder with it.
+    if (tryExtractAttribute(node)) {
+      walkShadow(node)
+      return
+    }
+
     if (shouldSkip(node, opts)) return
-
-    const tag = node.tagName.toLowerCase()
-
-    if (SKIP_CONTAINERS.has(tag)) return
 
     // Pre-wrap content whose paragraphs are literal blank lines in the text
     // (x.com long posts): normalize the separators to direct children, then
@@ -724,6 +780,15 @@ export function buildBlockSource(element: HTMLElement, skipSelectors?: string[])
   return buildMarkedSource(trimmedRuns(element, skipSelectors).texts)
 }
 
+/**
+ * The canonical payload and staleness token for an attribute-hint block: the
+ * attribute's current value, marked verbatim, so flushRecheck compares it
+ * against the token exactly as it does for a text block.
+ */
+export function buildAttributeSource(element: Element, attr: string): string {
+  return buildMarkedSource([element.getAttribute(attr)?.trim() ?? ''])
+}
+
 // A block's runs with edge whitespace removed, keeping which text node each
 // surviving run belongs to. The renderers split a response against exactly the
 // run list the request was built from, and translation-only writes the pieces
@@ -805,6 +870,17 @@ export function restoreTextNodes(root: ParentNode): void {
   })
 }
 
+// Undo a translated placeholder. The original rides in data-imp-attr-orig
+// (the DOM, not a WeakMap) so a stop restores it even if the content script
+// was reinjected between the write and the stop.
+function restoreAttributeHint(el: Element) {
+  const attr = el.getAttribute('data-imp-attr')
+  const orig = el.getAttribute('data-imp-attr-orig')
+  if (attr !== null && orig !== null) el.setAttribute(attr, orig)
+  el.removeAttribute('data-imp-attr')
+  el.removeAttribute('data-imp-attr-orig')
+}
+
 export function clearTranslations(root: Element = document.body) {
   function clearScope(scope: ParentNode) {
     restoreTextNodes(scope)
@@ -812,6 +888,7 @@ export function clearTranslations(root: Element = document.body) {
     scope.querySelectorAll('.imp-translate-br').forEach((el) => el.remove())
     scope.querySelectorAll(`.${SPACER_CLASS}`).forEach((el) => el.remove())
     scope.querySelectorAll(`[${PROCESSED_ATTR}]`).forEach((el) => {
+      restoreAttributeHint(el)
       el.removeAttribute(PROCESSED_ATTR)
       el.removeAttribute('data-imp-text')
       el.removeAttribute('data-imp-noop')
@@ -830,6 +907,7 @@ export function clearTranslations(root: Element = document.body) {
   }
 
   clearScope(root)
+  restoreAttributeHint(root)
   root.removeAttribute(PROCESSED_ATTR)
   root.removeAttribute('data-imp-text')
   root.removeAttribute('data-imp-noop')

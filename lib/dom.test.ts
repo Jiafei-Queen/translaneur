@@ -48,15 +48,18 @@ describe('extractBlocks', () => {
     expect(blocks[0].text).toContain('npm')
   })
 
-  it('should not translate nav or footer', () => {
+  it('should translate nav and footer', () => {
     document.body.innerHTML = `
       <nav><a href="/">Home</a></nav>
       <p>Main content</p>
       <footer><p>Copyright 2024</p></footer>
     `
     const blocks = extractBlocks(document.body)
-    expect(blocks).toHaveLength(1)
-    expect(blocks[0].text).toBe('Main content')
+    expect(blocks.map((b) => stripMarkers(b.text))).toEqual([
+      'Home',
+      'Main content',
+      'Copyright 2024',
+    ])
   })
 
   it('should extract text from leaf blocks inside containers', () => {
@@ -294,6 +297,106 @@ describe('extractBlocks', () => {
     })
     expect(blocks).toHaveLength(1)
     expect(blocks[0].text).toBe('Translate this')
+  })
+
+  it('translates semantic chrome (header/nav/aside/footer) even under an include scope', () => {
+    document.body.innerHTML = `
+      <header><h1>Site title</h1></header>
+      <nav><a href="/">Home</a></nav>
+      <div class="shell">
+        <div class="main"><p>Main content</p></div>
+        <aside><p>Related links</p></aside>
+        <footer><p>All rights reserved</p></footer>
+      </div>
+      <div class="unrelated"><p>Out of scope</p></div>
+    `
+    const blocks = extractBlocks(document.body, { includeSelectors: ['.main'] })
+    expect(blocks.map((b) => stripMarkers(b.text))).toEqual([
+      'Site title',
+      'Home',
+      'Main content',
+      'Related links',
+      'All rights reserved',
+    ])
+  })
+
+  it('ARIA landmark roles count as chrome under an include scope', () => {
+    document.body.innerHTML = `
+      <div role="banner"><p>Top bar</p></div>
+      <div role="complementary"><p>Side rail</p></div>
+      <div class="main"><p>Main content</p></div>
+    `
+    const blocks = extractBlocks(document.body, { includeSelectors: ['.main'] })
+    expect(blocks.map((b) => b.text)).toEqual(['Top bar', 'Side rail', 'Main content'])
+  })
+
+  it('a skip selector still wins over the chrome include', () => {
+    document.body.innerHTML = `
+      <header><p>Toolbar label</p></header>
+      <div class="main"><p>Main content</p></div>
+    `
+    const blocks = extractBlocks(document.body, {
+      includeSelectors: ['.main'],
+      skipSelectors: ['header'],
+    })
+    expect(blocks.map((b) => b.text)).toEqual(['Main content'])
+  })
+
+  it('extracts input/textarea placeholders as attribute blocks', () => {
+    document.body.innerHTML = `
+      <input placeholder="Search the docs">
+      <textarea placeholder="Ask a question"></textarea>
+      <input type="text" placeholder="">
+      <input placeholder="...">
+      <input placeholder="OK">
+      <p>Body text</p>
+    `
+    const blocks = extractBlocks(document.body)
+    expect(
+      blocks.map((b) => ({ text: b.text, attribute: b.attribute ?? null })),
+    ).toEqual([
+      { text: 'Search the docs', attribute: 'placeholder' },
+      { text: 'Ask a question', attribute: 'placeholder' },
+      { text: 'Body text', attribute: null },
+    ])
+  })
+
+  it('applies the include and skip gates to placeholders', () => {
+    document.body.innerHTML = `
+      <header><input placeholder="Site search"></header>
+      <div class="main"><textarea placeholder="Reply here"></textarea></div>
+      <div class="other"><input placeholder="Out of scope"></div>
+      <div class="main"><input data-skip placeholder="Skipped by rule"></div>
+    `
+    const blocks = extractBlocks(document.body, {
+      includeSelectors: ['.main'],
+      skipSelectors: ['input[data-skip]'],
+    })
+    // Chrome is in scope even under an include rule, but a skip selector
+    // beats it — for placeholders exactly as for text.
+    expect(blocks.map((b) => b.text)).toEqual(['Site search', 'Reply here'])
+  })
+
+  it('restores the original placeholder when translations are cleared', () => {
+    document.body.innerHTML = `<input placeholder="Search the docs">`
+    const input = document.querySelector('input')!
+    const blocks = extractBlocks(document.body)
+    expect(blocks).toHaveLength(1)
+    // What translateBlocks seeds before the request and what the renderer
+    // writes after it — the two attributes clearTranslations keys on.
+    markTranslated(input)
+    input.setAttribute('data-imp-attr', 'placeholder')
+    input.setAttribute('data-imp-attr-orig', 'Search the docs')
+    input.setAttribute('data-imp-text', blocks[0]!.text)
+    input.setAttribute('placeholder', '搜索文档')
+
+    clearTranslations(document.body)
+
+    expect(input.getAttribute('placeholder')).toBe('Search the docs')
+    expect(input.hasAttribute('data-imp-attr')).toBe(false)
+    expect(input.hasAttribute('data-imp-attr-orig')).toBe(false)
+    expect(input.hasAttribute(PROCESSED_ATTR)).toBe(false)
+    expect(input.hasAttribute('data-imp-text')).toBe(false)
   })
 
   it('old.reddit classic DOM: a.title + .md isolate text slots, chrome stays out', () => {

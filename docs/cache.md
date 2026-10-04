@@ -27,6 +27,9 @@ Three parts.
 Built by `buildBlockSource` in `lib/dom.ts`, which is the single source for the
 three places that must agree: what `extractBlocks` stores as `block.text`, what
 `data-imp-text` records as the staleness token, and what the provider is asked.
+Attribute-hint blocks (input/textarea placeholders) have the same three places
+through `buildAttributeSource` — the attribute's current value instead of a run
+list.
 
 ## Both display modes send the same payload
 

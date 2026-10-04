@@ -182,6 +182,45 @@ describe('render', () => {
     expect(p.hasAttribute('data-imp-noop')).toBe(false)
   })
 
+  it('writes an attribute-hint translation into the placeholder in both modes', () => {
+    document.body.innerHTML = `<input placeholder="Search the docs">`
+    const input = document.querySelector('input')!
+    const blocks: TranslatableBlock[] = [
+      {
+        element: input as HTMLElement,
+        text: 'Search the docs',
+        attribute: 'placeholder',
+      },
+    ]
+    for (const renderMode of ['bilingual', 'translation-only'] as const) {
+      input.setAttribute('placeholder', 'Search the docs')
+      replaceWithTranslation(blocks, ['搜索文档'], { renderMode })
+
+      expect(input.getAttribute('placeholder')).toBe('搜索文档')
+      // The token follows the attribute, so flushRecheck sees no drift.
+      expect(input.getAttribute('data-imp-text')).toBe('搜索文档')
+      // No ring: a form control renders its value, not its children.
+      expect(input.querySelector('font')).toBeNull()
+      expect(input.hasAttribute('data-imp-noop')).toBe(false)
+    }
+  })
+
+  it('keeps the page hint and marks a no-op when a placeholder translation echoes it', () => {
+    document.body.innerHTML = `<input placeholder="Search the docs">`
+    const input = document.querySelector('input')!
+    const blocks: TranslatableBlock[] = [
+      {
+        element: input as HTMLElement,
+        text: 'Search the docs',
+        attribute: 'placeholder',
+      },
+    ]
+    replaceWithTranslation(blocks, ['search the docs'])
+
+    expect(input.getAttribute('placeholder')).toBe('Search the docs')
+    expect(input.hasAttribute('data-imp-noop')).toBe(true)
+  })
+
   it('should remove translation and separator when translation is empty', () => {
     document.body.innerHTML = `<p>Hello world</p>`
     const p = document.querySelector('p')!
