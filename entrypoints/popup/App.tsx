@@ -62,7 +62,11 @@ export function App() {
   // Tab translation state — the query is disabled until tabMeta resolves
   const { data: tabLang } = useQuery(tabStateQuery(tabMeta))
 
-  const isTranslated = tabLang !== null
+  // `!= null`, not `!== null`: while the query is still in flight `data` is
+  // undefined, and treating that as "translated" made the popup flash "Show
+  // Original" — and render the Re-translate control — on a page that was never
+  // translated. Only a language string means translated.
+  const isTranslated = tabLang != null
 
   // Toggle translate / restore — reads latest state via queryClient, not closure
   const toggleMutation = useMutation({
