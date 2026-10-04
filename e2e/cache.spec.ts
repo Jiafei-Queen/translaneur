@@ -1,7 +1,8 @@
 import { test, expect } from './fixtures'
-import type { Page } from '@playwright/test'
 import {
+  billedTexts,
   configureMockProvider,
+  getMockLog,
   openBackgroundPopup,
   startTranslation,
   stopTranslation,
@@ -9,25 +10,6 @@ import {
 } from './helpers'
 
 const TRANSLATED = '.imp-translate-result:not(.imp-translate-loading)'
-
-interface MockLogEntry {
-  texts: string[]
-  system: string
-  receivedAt: number
-  completedAt: number | null
-}
-
-async function getMockLog(page: Page, baseURL: string) {
-  const resp = await page.request.get(`${baseURL}/mock/log`)
-  return (await resp.json()) as MockLogEntry[]
-}
-
-// How many texts the provider was asked to translate, across all requests.
-// Cache hits never reach the mock, so this is the bill.
-async function billedTexts(page: Page, baseURL: string): Promise<string[]> {
-  const log = await getMockLog(page, baseURL)
-  return log.flatMap((entry) => entry.texts)
-}
 
 // The bug this file exists for: switching Display re-translated the whole page,
 // so an OpenAI user paid twice for the same content. Both modes now send the

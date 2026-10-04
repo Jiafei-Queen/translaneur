@@ -562,6 +562,7 @@ describe('toast bar', () => {
       translating: true,
       onRestore: vi.fn(),
       onTranslate: vi.fn(),
+      onRetranslate: vi.fn(),
       onSettings: vi.fn(),
       onLangChange: vi.fn(),
       currentRenderMode: 'bilingual',
@@ -597,6 +598,21 @@ describe('toast bar', () => {
     btn.click()
     expect(onTranslate).toHaveBeenCalledOnce()
     expect(onRestore).not.toHaveBeenCalled()
+  })
+
+  it('offers re-translate only while translating', () => {
+    const onRetranslate = vi.fn()
+    showToastBar(baseOptions({ translating: true, onRetranslate }))
+
+    const btn = document.querySelector<HTMLButtonElement>('.imp-toast-retranslate')!
+    expect(btn.title).toBe('Re-translate')
+    btn.click()
+    expect(onRetranslate).toHaveBeenCalledOnce()
+
+    // Restored: nothing is on screen to refresh, so the control is gone
+    // rather than present-and-inert.
+    showToastBar(baseOptions({ translating: false, onRetranslate }))
+    expect(document.querySelector('.imp-toast-retranslate')).toBeNull()
   })
 
   it('keeps the language select and settings button in the restored state', () => {

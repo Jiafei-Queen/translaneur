@@ -4,6 +4,9 @@ import type { SiteRule } from './rules'
 export interface TranslateRequest {
   text: string
   targetLang: string
+  // Force re-translation: skip the cache read for this text. See
+  // docs/cache.md — "Re-translate".
+  force?: boolean
 }
 
 export interface TranslateBatchRequest {
@@ -35,7 +38,11 @@ export const messager = defineExtensionMessaging<{
     apiKey: string
   }): Promise<{ ok: true } | { ok: false; error: string }>
   getMatchedRulesForHostname(data: { hostname: string }): SiteRule[]
-  startTab(data: { tabId: number; targetLang: string }): void
+  // `force` re-translates a page that is already translated: the content
+  // script stops itself and walks again with the cache read skipped. Without
+  // it a start on a translating tab is a no-op (see the content script's
+  // isTranslating guard).
+  startTab(data: { tabId: number; targetLang: string; force?: boolean }): void
   stopTab(data: { tabId: number }): void
   getTabState(data: { tabId: number }): string | null
   getSelfTabState(): string | null
@@ -65,6 +72,7 @@ export const messager = defineExtensionMessaging<{
     targetLang: string
     showToast?: boolean
     rules: SiteRule[]
+    force?: boolean
   }): void
   stopTranslation(): void
   getState(): boolean

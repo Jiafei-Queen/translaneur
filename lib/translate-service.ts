@@ -16,7 +16,15 @@ export interface TranslateServiceConfig {
 }
 
 export interface TranslateService {
-  translate: (text: string, lang: string) => Promise<string>
+  // `force` skips the cache read so the provider is asked again and the answer
+  // overwrites the entry. The write is deliberately kept: a forced pass is a
+  // refresh, not a one-off, and the next normal pass should be a hit rather
+  // than paying for the same text twice.
+  translate: (
+    text: string,
+    lang: string,
+    opts?: { force?: boolean },
+  ) => Promise<string>
 }
 
 interface PendingItem {
@@ -126,9 +134,11 @@ export function createTranslateService(config: TranslateServiceConfig): Translat
   }
 
   return {
-    async translate(text, lang) {
-      const cached = await config.getCached(text, lang)
-      if (cached !== undefined) return cached
+    async translate(text, lang, opts) {
+      if (!opts?.force) {
+        const cached = await config.getCached(text, lang)
+        if (cached !== undefined) return cached
+      }
       return enqueue(text, lang)
     },
   }

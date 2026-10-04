@@ -10,7 +10,7 @@ import { messager } from '@/lib/message'
 import { getSettings, saveSettings, type RenderMode } from '@/lib/storage'
 import { LANGUAGES_SORTED } from '@/lib/languages'
 import { isPdfUrl } from '@/lib/utils'
-import { SettingsIcon } from 'lucide-react'
+import { RotateCw, SettingsIcon } from 'lucide-react'
 import { BrandIcon } from '@/components/ui/brand-icon'
 import {
   SegmentedControl,
@@ -132,6 +132,24 @@ export function App() {
     browser.runtime.openOptionsPage()
   }
 
+  // Forced re-translate: ask the provider again for every block on the page
+  // instead of reading the cache. Only reachable while the tab is translated
+  // (the button is hidden otherwise). Single message, not stop-then-start:
+  // the content script restarts itself in place, so closing the popup midway
+  // cannot leave the page restored and untranslated.
+  const retranslateMutation = useMutation({
+    mutationFn: async () => {
+      const tabId = tabMeta!.id
+      const lang = (await queryClient.fetchQuery(settingsQuery)).targetLang
+      await messager.sendMessage('startTab', { tabId, targetLang: lang, force: true })
+    },
+    onSuccess: () => {
+      if (tabMeta) {
+        queryClient.invalidateQueries({ queryKey: tabStateQuery(tabMeta).queryKey })
+      }
+    },
+  })
+
   if (!settings || !tabMeta) return null
 
   return (
@@ -141,7 +159,13 @@ export function App() {
           <BrandIcon className="w-5 h-5" />
           Translaneur
         </h1>
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={openOptions}>
+        <Button
+          id="imp-settings"
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7"
+          onClick={openOptions}
+        >
           <SettingsIcon className="w-4 h-4" />
         </Button>
       </div>
@@ -180,21 +204,34 @@ export function App() {
           PDF pages cannot be translated
         </p>
       ) : (
-        <Button
-          className="w-full"
-          onClick={() => toggleMutation.mutate()}
-          disabled={
-            toggleMutation.isPending ||
-            langChangeMutation.isPending ||
-            renderModeChangeMutation.isPending
-          }
-        >
-          {toggleMutation.isPending
-            ? 'Translating...'
-            : isTranslated
-              ? 'Show Original'
-              : 'Translate Page'}
-        </Button>
+        <div className="space-y-2">
+          <Button
+            className="w-full"
+            onClick={() => toggleMutation.mutate()}
+            disabled={
+              toggleMutation.isPending ||
+              langChangeMutation.isPending ||
+              renderModeChangeMutation.isPending
+            }
+          >
+            {toggleMutation.isPending
+              ? 'Translating...'
+              : isTranslated
+                ? 'Show Original'
+                : 'Translate Page'}
+          </Button>
+          {isTranslated && (
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => retranslateMutation.mutate()}
+              disabled={retranslateMutation.isPending || toggleMutation.isPending}
+            >
+              <RotateCw />
+              {retranslateMutation.isPending ? 'Re-translating...' : 'Re-translate'}
+            </Button>
+          )}
+        </div>
       )}
     </div>
   )

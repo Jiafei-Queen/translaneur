@@ -590,6 +590,7 @@ function ensureToastStyles() {
       }
       #${TOAST_ID} .imp-toast-restore { color: #6ea8fe !important; }
       #${TOAST_ID} .imp-toast-settings { color: #aaa !important; }
+      #${TOAST_ID} .imp-toast-retranslate { color: #aaa !important; }
     }
     #${TOAST_ID} .imp-toast-text { flex: 1; }
     #${TOAST_ID} button {
@@ -603,6 +604,7 @@ function ensureToastStyles() {
     #${TOAST_ID} button:active { opacity: 0.7; }
     #${TOAST_ID} .imp-toast-restore { color: #2563eb; }
     #${TOAST_ID} .imp-toast-settings { color: #666; font-size: 16px; }
+    #${TOAST_ID} .imp-toast-retranslate { color: #666; font-size: 16px; }
     #${TOAST_ID} .imp-toast-lang {
       appearance: none;
       -webkit-appearance: none;
@@ -686,6 +688,11 @@ export interface ToastBarOptions {
   translating: boolean
   onRestore: () => void
   onTranslate: () => void
+  // Re-translate the page that is already translated, asking the provider
+  // again instead of reading the cache. Only rendered while `translating` —
+  // there is nothing to refresh on a restored page (that is what onTranslate
+  // is for).
+  onRetranslate: () => void
   onSettings: () => void
   onLangChange: (lang: string) => void
   currentRenderMode: RenderMode
@@ -784,7 +791,19 @@ export function showToastBar(options: ToastBarOptions) {
   settingsBtn.textContent = '⚙'
   settingsBtn.addEventListener('click', options.onSettings)
 
-  bar.append(langSelect, displayGroup, spacer, restoreBtn, settingsBtn)
+  bar.append(langSelect, displayGroup, spacer)
+  if (options.translating) {
+    const retranslateBtn = document.createElement('button')
+    retranslateBtn.className = 'imp-toast-retranslate'
+    retranslateBtn.textContent = '↻'
+    retranslateBtn.title = 'Re-translate'
+    retranslateBtn.addEventListener('click', () => {
+      options.onRetranslate()
+      options.onResetTimer?.(5000)
+    })
+    bar.appendChild(retranslateBtn)
+  }
+  bar.append(restoreBtn, settingsBtn)
   document.body.appendChild(bar)
 }
 

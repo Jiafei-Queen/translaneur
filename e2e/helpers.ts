@@ -260,3 +260,33 @@ export async function getLastIcon(
     return mine.length > 0 ? mine[mine.length - 1].icon : null
   }, tabId)
 }
+
+export interface MockLogEntry {
+  texts: string[]
+  system: string
+  receivedAt: number
+  completedAt: number | null
+}
+
+export async function getMockLog(page: Page, baseURL: string): Promise<MockLogEntry[]> {
+  const resp = await page.request.get(`${baseURL}/mock/log`)
+  return (await resp.json()) as MockLogEntry[]
+}
+
+// Every text the provider was asked to translate, across all requests. A cache
+// hit never reaches the mock, so this is the bill.
+export async function billedTexts(page: Page, baseURL: string): Promise<string[]> {
+  const log = await getMockLog(page, baseURL)
+  return log.flatMap((entry) => entry.texts)
+}
+
+// Make the provider's answer for a source text differ from now on. A call
+// count alone cannot tell "skipped the cache read" from "read a refreshed
+// entry"; changing the answer makes the difference visible on the page.
+export async function setMockReplies(
+  page: Page,
+  baseURL: string,
+  replies: Record<string, string>,
+) {
+  await page.request.post(`${baseURL}/mock/replies`, { data: { replies } })
+}

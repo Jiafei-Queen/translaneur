@@ -49,7 +49,9 @@ test('popup settings button opens options page', async ({
 
   const [optionsPage] = await Promise.all([
     context.waitForEvent('page'),
-    page.locator('button').filter({ has: page.locator('svg') }).last().click(),
+    // By id, not "the last button containing an icon": the popup now renders a
+    // Re-translate button (also icon-bearing) once the tab is translated.
+    page.locator('#imp-settings').click(),
   ])
 
   await expect(optionsPage).toHaveURL(new RegExp(`chrome-extension://${extensionId}/options.html`))

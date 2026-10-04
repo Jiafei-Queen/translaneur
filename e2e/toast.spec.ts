@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures'
 import {
+  billedTexts,
   startTranslation,
   stopTranslation,
   configureMockProvider,
@@ -150,6 +151,50 @@ test('toolbar tap while translating restores the page and offers "Translate"', a
   await expect(page.locator(`${TOAST} .imp-toast-restore`)).toHaveText('Translate')
   await expect(page.locator(LANG_SELECT)).toBeVisible()
   await expect(page.locator(`${TOAST} .imp-toast-settings`)).toBeVisible()
+})
+
+// The mobile counterpart of the popup's "Re-translate". Driven from the
+// restored bar rather than straight from startTranslation: that way the test
+// does not depend on the helper's start winning its race with the content
+// script's auto-init, which starts without the toast.
+test('toast offers re-translate while translating, and it forces a fresh pass', async ({
+  context,
+  baseURL,
+}) => {
+  const page = await context.newPage()
+  await page.goto(baseURL)
+  await page.waitForLoadState('domcontentloaded')
+
+  await configureMockProvider(page, baseURL)
+  await enableMobileMode(context)
+  await startTranslation(page)
+  await expect(page.locator(TRANSLATED).first()).toBeVisible({ timeout: 15000 })
+
+  // Toolbar tap while translating → restored bar. "Translate" from there
+  // rebuilds the bar in translating mode, which is where ↻ lives.
+  await stopTranslation(page)
+  const toast = page.locator(TOAST)
+  await expect(toast).toBeVisible({ timeout: 3000 })
+  await page.locator(`${TOAST} .imp-toast-restore`).click()
+  await expect(page.locator(TRANSLATED).first()).toBeVisible({ timeout: 15000 })
+
+  const retranslate = page.locator(`${TOAST} .imp-toast-retranslate`)
+  await expect(retranslate).toBeVisible()
+
+  // That second pass was a cache hit, so the bill is the first pass alone.
+  const before = await billedTexts(page, baseURL)
+  await retranslate.click()
+
+  // The forced pass asks again for every block of the page…
+  await expect
+    .poll(async () => (await billedTexts(page, baseURL)).length, { timeout: 15000 })
+    .toBe(before.length * 2)
+  // …and the page really re-rendered from it.
+  await expect(page.locator('h1')).toContainText('[翻译] Home Page')
+
+  // Restored: nothing is on screen to refresh, so the control is gone.
+  await stopTranslation(page)
+  await expect(page.locator(`${TOAST} .imp-toast-retranslate`)).toHaveCount(0)
 })
 
 test('clicking "Translate" re-translates and flips the button back', async ({

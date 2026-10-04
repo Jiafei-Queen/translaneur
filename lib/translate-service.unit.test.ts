@@ -291,6 +291,50 @@ describe('translate-service', () => {
     expect(h.translator).toHaveBeenNthCalledWith(2, ['second'], 'en')
   })
 
+  it('force skips the cache read and asks the translator again', async () => {
+    const { service, translator } = createHarness()
+
+    const first = service.translate('hello', 'zh')
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(first).resolves.toBe('[hello]')
+    expect(translator).toHaveBeenCalledTimes(1)
+
+    // Cached now, so no translator call.
+    await expect(service.translate('hello', 'zh')).resolves.toBe('[hello]')
+    expect(translator).toHaveBeenCalledTimes(1)
+
+    // Forced: the read is skipped, so this one goes to the translator.
+    const forced = service.translate('hello', 'zh', { force: true })
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(forced).resolves.toBe('[hello]')
+    expect(translator).toHaveBeenCalledTimes(2)
+  })
+
+  // A forced pass is a refresh, not a one-off: the fresh answer has to land in
+  // the cache, or every later pass would keep paying for the same text.
+  it('force overwrites the cache entry with the fresh translation', async () => {
+    const cache = new Map<string, string>([['zh::hello', '[old]']])
+    const setCached = vi.fn(async (text: string, lang: string, translated: string) => {
+      cache.set(`${lang}::${text}`, translated)
+    })
+    const translator = vi.fn(async (texts: string[]) => texts.map((t) => `[new] ${t}`))
+    const service = createTranslateService({
+      getCached: async (text, lang) => cache.get(`${lang}::${text}`),
+      setCached,
+      translator,
+      getLimits: () => ({ batchWindowMs: 50, maxBatchSize: 10 }),
+    })
+
+    const forced = service.translate('hello', 'zh', { force: true })
+    await vi.advanceTimersByTimeAsync(50)
+    await expect(forced).resolves.toBe('[new] hello')
+    expect(setCached).toHaveBeenCalledWith('hello', 'zh', '[new] hello')
+
+    // …and the next normal request reads that value rather than the stale one.
+    await expect(service.translate('hello', 'zh')).resolves.toBe('[new] hello')
+    expect(translator).toHaveBeenCalledTimes(1)
+  })
+
   it('picks up a changed maxBatchSize without recreating the service', async () => {
     // The background memoises one service per provider, so limits captured at
     // construction would ignore a change saved on the options page. The batch

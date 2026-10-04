@@ -336,6 +336,11 @@ interface MockLogEntry {
 }
 const mockState = {
   delays: [] as { text: string; ms: number }[],
+  // Per-source-text reply override, keyed by the source string. Lets a test
+  // make the provider's answer change between passes so a cached read and a
+  // fresh call are distinguishable by what lands on the page — a call count
+  // alone cannot tell "skipped the read" from "read a refreshed entry".
+  replies: new Map<string, string>(),
   log: [] as MockLogEntry[],
 }
 
@@ -370,11 +375,12 @@ app.post('/v1/chat/completions', async (c) => {
   let match
   while ((match = tagRegex.exec(userMsg)) !== null) {
     sourceTexts.push(match[2])
-    translated += `<t id="${match[1]}">[翻译] ${match[2]}</t>\n`
+    const override = mockState.replies.get(match[2])
+    translated += `<t id="${match[1]}">${override ?? `[翻译] ${match[2]}`}</t>\n`
   }
   if (!translated) {
     sourceTexts.push(userMsg)
-    translated = `[翻译] ${userMsg}`
+    translated = mockState.replies.get(userMsg) ?? `[翻译] ${userMsg}`
   }
 
   const entry: MockLogEntry = { texts: sourceTexts, system: systemMsg, receivedAt: Date.now(), completedAt: null }
@@ -396,6 +402,12 @@ app.post('/v1/chat/completions', async (c) => {
 app.post('/mock/delays', async (c) => {
   const body = await c.req.json()
   mockState.delays = body.delays ?? []
+  return c.json({ ok: true })
+})
+
+app.post('/mock/replies', async (c) => {
+  const body = await c.req.json()
+  mockState.replies = new Map(Object.entries(body.replies ?? {}))
   return c.json({ ok: true })
 })
 
@@ -421,6 +433,7 @@ export function createTestServer(): { start(): Promise<string>; stop(): Promise<
   return {
     async start() {
       mockState.delays = []
+      mockState.replies = new Map()
       mockState.log = []
       return new Promise<string>((resolve) => {
         server = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' }, (info) => {

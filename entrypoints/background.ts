@@ -93,6 +93,7 @@ async function startTranslationForTab(
   tabId: number,
   targetLang: string,
   showToast = false,
+  force = false,
 ) {
   const t = debugTime(`startTranslationForTab(tabId=${tabId})`)
   await setTabTranslatingLang(tabId, targetLang)
@@ -114,7 +115,7 @@ async function startTranslationForTab(
   const tab = await browser.tabs.get(tabId)
   const rules = await getMatchedRulesForHostname(hostnameFromUrl(tab.url))
   t('rules fetched')
-  await messager.sendMessage('startTranslation', { targetLang, showToast, rules }, { tabId })
+  await messager.sendMessage('startTranslation', { targetLang, showToast, rules, force }, { tabId })
   t('startTranslation sent')
 }
 
@@ -318,7 +319,11 @@ export default defineBackground(() => {
     const t = debugTime(`bg:translate(lang=${data.targetLang}, text="${data.text.slice(0, 40)}")`)
     const settings = await getSettings()
     t('getSettings done')
-    const result = await getService(settings.provider).translate(data.text, data.targetLang)
+    const result = await getService(settings.provider).translate(
+      data.text,
+      data.targetLang,
+      { force: data.force },
+    )
     t('translate done')
     return result
   })
@@ -404,7 +409,7 @@ export default defineBackground(() => {
   })
 
   messager.onMessage('startTab', async ({ data }) => {
-    await startTranslationForTab(data.tabId, data.targetLang, true)
+    await startTranslationForTab(data.tabId, data.targetLang, true, data.force)
   })
 
   messager.onMessage('stopTab', async ({ data }) => {

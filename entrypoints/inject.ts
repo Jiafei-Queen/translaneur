@@ -68,6 +68,12 @@ export default defineUnlistedScript(() => {
   let isTranslating = false
   let targetLang = ''
   let renderMode: RenderMode = 'bilingual'
+  // Elements belonging to the extraction a forced re-translate started on.
+  // Scoped by element rather than by run: the observer reveals these blocks
+  // long after the walk (scroll), while SPA navigation and rescans re-extract
+  // without a new startTranslation, so a run-scoped flag would force-bill every
+  // route the user moved to afterwards. Blocks outside this set take the cache.
+  let forceBlocks: WeakSet<Element> | null = null
   let observer: MutationObserver | null = null
   const shadowObservers = new Map<ShadowRoot, MutationObserver>()
   let clickRescanTimer: ReturnType<typeof setTimeout> | null = null
@@ -96,20 +102,24 @@ export default defineUnlistedScript(() => {
   // what extractBlocks put in block.text, what the cache keys on, and what
   // data-imp-text stores after a swap — so flushRecheck never mistakes our own
   // written translation for changed page text.
-  function currentBlockSource(el: HTMLElement): string {
-    return buildBlockSource(el, extractOpts.skipSelectors)
-  }
-
   //
   // Mode-independent on purpose. The two modes must derive the same string for
   // the same DOM, or a mode switch re-requests the whole page; and in
   // translation-only the runs hold translated text after a swap, so the token
   // has to be recomputed the same way it was seeded or recheck loops.
+  function currentBlockSource(el: HTMLElement): string {
+    return buildBlockSource(el, extractOpts.skipSelectors)
+  }
+
   function translateBatch(batch: TranslatableBlock[]) {
     const t = debugTime(`translateBatch(n=${batch.length})`)
     for (const block of batch) {
+      // Per block, because one batch can mix blocks from the forced extraction
+      // with ones a later rescan found. A forced block is re-fetched (and its
+      // cache entry overwritten); everything else is read-through.
+      const force = forceBlocks?.has(block.element) ?? false
       messager
-        .sendMessage('translate', { text: block.text, targetLang })
+        .sendMessage('translate', { text: block.text, targetLang, force })
         .then((translated) => {
           if (!isTranslating || isStale(block)) return
           replaceWithTranslation([block], [translated], {
@@ -514,19 +524,19 @@ export default defineUnlistedScript(() => {
     hideToastBar()
   }
 
-  // Shared by both local re-translate paths (language change and
-  // "Translate"): stop (harmless even if already restored — see onTranslate
-  // below), tell the background this tab is translating again, then restart
-  // locally with the retained host rules. `showToast` controls whether
-  // startTranslation rebuilds the bar via maybeShowToast: "Translate"
+  // Shared by the local re-translate paths (language change, "Translate", and
+  // the toast's re-translate): stop (harmless even if already restored — see
+  // onTranslate below), tell the background this tab is translating again,
+  // then restart locally with the retained host rules. `showToast` controls
+  // whether startTranslation rebuilds the bar via maybeShowToast: "Translate"
   // needs that to flip it into "translating" mode, while a language change
   // keeps the bar it already has (rebuilding would replay the slide-in while
   // the user is still on the select).
-  async function restartTranslation(lang: string, showToast: boolean) {
+  async function restartTranslation(lang: string, showToast: boolean, force = false) {
     const rules = hostRules
     stopTranslation(true)
     messager.sendMessage('startSelfTab', { targetLang: lang })
-    await startTranslation(lang, showToast, rules)
+    await startTranslation(lang, showToast, rules, force)
   }
 
   async function maybeShowToast() {
@@ -543,6 +553,12 @@ export default defineUnlistedScript(() => {
         dismissToast()
         stopTranslation()
         messager.sendMessage('stopSelfTab')
+      },
+      // Forced pass: the page is already translated, so this is the one way to
+      // ask the provider again. Keeps the bar (the walk refills it) and skips
+      // the slide-in, same as a language change.
+      onRetranslate: () => {
+        restartTranslation(targetLang, false, true)
       },
       // Calling stopTranslation(true) inside restartTranslation on an
       // already-restored page is harmless, so no idle/translating branch
@@ -597,9 +613,22 @@ export default defineUnlistedScript(() => {
     lang: string,
     showToast = false,
     rules: SiteRule[] = [],
+    force = false,
   ) {
     const t = debugTime('content:startTranslation')
-    if (isTranslating) { t('skipped — already translating'); return }
+    if (isTranslating) {
+      // A start on a translating page is normally a no-op (the background may
+      // deliver it twice, and auto-init can race it). A forced re-translate
+      // arrives here with the tab already translating, so clear what is on
+      // screen and walk again in place: the background has already set the tab
+      // state and the active icon, and a full stop would only flip them back.
+      if (!force) {
+        t('skipped — already translating')
+        return
+      }
+      t('force — restarting the existing run')
+      stopTranslation(true)
+    }
     isTranslating = true
     targetLang = lang
     hostRules = rules
@@ -618,6 +647,10 @@ export default defineUnlistedScript(() => {
     t('observer created')
     const blocks = extractBlocks(document.body, extractOpts)
     t(`extractBlocks done — ${blocks.length} blocks`)
+    // The forced extraction: these elements, and only these, skip the cache
+    // read. The blocks the IntersectionObserver reveals later come from this
+    // same extraction, so a forced pass covers the page as the user scrolls it.
+    if (force) forceBlocks = new WeakSet(blocks.map((b) => b.element))
     document.addEventListener('toggle', onToggle, { capture: true })
     document.addEventListener('click', onClick, { passive: true, capture: true })
     document.addEventListener('scroll', onScroll, { passive: true, capture: true })
@@ -640,11 +673,14 @@ export default defineUnlistedScript(() => {
     // dimensions when the initial extractBlocks runs, so isHidden()
     // filters them out. A delayed rescan catches them once rendering
     // settles, without requiring the user to toggle translation off/on.
+    // Not a forced pass: this re-extracts the whole body, so it would sweep in
+    // content the user never asked to re-fetch (see forceBlocks).
     delayedRescanTimer = setTimeout(rescanBlocks, 1000)
   }
 
   function stopTranslation(keepToast = false) {
     isTranslating = false
+    forceBlocks = null
     if (observer) {
       observer.disconnect()
       observer = null
@@ -698,7 +734,7 @@ export default defineUnlistedScript(() => {
   // not the translation to finish, and waiting here would keep the sender's
   // response channel (and the SW) busy for the whole first scan.
   messager.onMessage('startTranslation', ({ data }) => {
-    startTranslation(data.targetLang, data.showToast, data.rules)
+    startTranslation(data.targetLang, data.showToast, data.rules, data.force)
   })
   messager.onMessage('stopTranslation', () => {
     stopTranslation()
