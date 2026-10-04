@@ -295,6 +295,16 @@ Collapsed tail paragraph that gets cut https://t.co/abc</span></div>
 </script>
 </body>
 </html>`,
+  // Exercises the Google glossary path: the service worker's fetch is stubbed
+  // for the test, so what matters is the payload it builds from this text.
+  '/term-glossary': `<!DOCTYPE html>
+<html lang="en">
+<head><title>Term Glossary</title></head>
+<body>
+<p>Mercury is a chemical element with the symbol Hg.</p>
+</body>
+</html>`,
+
   '/x-longpost': `<!DOCTYPE html>
 <html lang="en">
 <head><title>Long Post</title></head>
@@ -317,6 +327,10 @@ Line two stays in the same block.</span></div>
 // translation responses to arrive out of order, reproducing streaming races.
 interface MockLogEntry {
   texts: string[]
+  // Recorded so a test can assert what the extension actually sent as
+  // instructions, not just the user text it asked to translate. The prompt is
+  // where settings like the glossary land, and it is invisible in `texts`.
+  system: string
   receivedAt: number
   completedAt: number | null
 }
@@ -333,9 +347,23 @@ const app = new Hono()
 
 app.use('/v1/*', cors())
 
+/** Content of the first message with `role`, or '' — the request body is external input. */
+function messageContent(data: unknown, role: string): string {
+  if (typeof data !== 'object' || data === null || !('messages' in data)) return ''
+  const { messages } = data
+  if (!Array.isArray(messages)) return ''
+  for (const m of messages) {
+    if (typeof m !== 'object' || m === null) continue
+    if (!('role' in m) || m.role !== role) continue
+    return 'content' in m && typeof m.content === 'string' ? m.content : ''
+  }
+  return ''
+}
+
 app.post('/v1/chat/completions', async (c) => {
   const data = await c.req.json()
-  const userMsg: string = data.messages?.find((m: any) => m.role === 'user')?.content ?? ''
+  const userMsg = messageContent(data, 'user')
+  const systemMsg = messageContent(data, 'system')
   const tagRegex = /<t id="(\d+)">([\s\S]*?)<\/t>/g
   const sourceTexts: string[] = []
   let translated = ''
@@ -349,7 +377,7 @@ app.post('/v1/chat/completions', async (c) => {
     translated = `[翻译] ${userMsg}`
   }
 
-  const entry: MockLogEntry = { texts: sourceTexts, receivedAt: Date.now(), completedAt: null }
+  const entry: MockLogEntry = { texts: sourceTexts, system: systemMsg, receivedAt: Date.now(), completedAt: null }
   mockState.log.push(entry)
   const delayMs = Math.max(
     0,

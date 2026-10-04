@@ -32,10 +32,31 @@ Two placeholders are substituted with the target language:
 - `{{targetLang}}`
 - `{{to}}`
 
+A third, `{{terms_prompt}}`, is where the [Glossary](#glossary) section is inserted. If the
+system prompt does not contain the placeholder, the section is appended to the end anyway —
+see below for why.
+
 Every other `{{placeholder}}` is removed before the prompt is sent. The file is shared
 with Immersive Translate and carries placeholders (`title_prompt`, `summary_prompt`,
-`terms_prompt`, `imt_style_guide`) that this extension has no producer for; a model that
-sees a literal placeholder tends to echo it back.
+`imt_style_guide`) that this extension has no producer for; a model that sees a literal
+placeholder tends to echo it back.
+
+## Glossary
+
+The glossary is a General option and reaches this provider as instructions in
+the system prompt. Google gets the same terms by a different mechanism — see
+[glossary.md](glossary.md) for the syntax, the per-provider behaviour, and the
+sentinel measurements.
+
+Two consequences specific to this path:
+
+- **A custom system prompt cannot switch it off.** Deleting `{{terms_prompt}}`
+  moves the section to the end; it does not remove it. Treating the placeholder
+  as opt-in would mean a user who edits the prompt and removes the one line they
+  were told was optional silently loses every term, while the options page still
+  listed them all as active.
+- **It costs tokens on every request**, proportional to its length. It is a
+  small list by design.
 
 ## Extra request parameters
 
@@ -101,8 +122,8 @@ request of its own to lose.
 
 The page is split into two sections behind the switcher under the Translaneur wordmark:
 
-- **General** — target language, display mode, toggle shortcut, developer mode and custom
-  skip rules.
+- **General** — target language, display mode, toggle shortcut, glossary, developer mode
+  and custom skip rules.
 - **Provider** — the provider picker and the configuration for whichever provider is
   selected.
 

@@ -77,6 +77,10 @@ recheck pass sees an unchanged block and does not retry in a loop.
 Blocks with no element boundaries still get the proportional split — nothing
 visible can be broken there, so dropping the translation would be a pure loss.
 
+The same real-prose measurement that settled run markers also decided how a
+glossary reaches Google: an index-based text sentinel, neither a tag nor the
+term itself. See [`glossary.md`](glossary.md).
+
 ## Invariants worth preserving
 
 - Once settled, translation-only writes into the **existing** text nodes. It

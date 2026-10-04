@@ -44,6 +44,12 @@ export interface Settings {
   // real binding is read from browser.commands.getAll() and can differ on
   // Chrome, which refuses to let extensions assign shortcuts.
   hotkey: string
+  // Source→target term pairs, one "source = target" per line, `!` comments.
+  // Stored as text rather than a parsed list so the options page can hold a
+  // half-typed line and keep the user's caret position; see lib/glossary.ts.
+  // OpenAI reads it as prompt instructions, Google as sentinels in the text;
+  // Microsoft and Imp Credits cannot use it. See docs/glossary.md.
+  glossary: string
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -54,6 +60,7 @@ const DEFAULT_SETTINGS: Settings = {
   debugMode: false,
   customRules: '',
   hotkey: DEFAULT_HOTKEY,
+  glossary: '',
   openai: {
     apiKey: '',
     baseUrl: 'https://api.openai.com/v1',

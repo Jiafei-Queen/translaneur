@@ -25,6 +25,7 @@ const FULL_C =
 
 interface MockLogEntry {
   texts: string[]
+  system: string
   receivedAt: number
   completedAt: number | null
 }

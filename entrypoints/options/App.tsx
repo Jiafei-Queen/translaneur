@@ -15,6 +15,7 @@ import {
   parseExtraBodyParams,
   parseNonNegativeInt,
 } from '@/lib/openai-params'
+import { parseGlossary } from '@/lib/glossary'
 import {
   SegmentedControl,
   type SegmentedOption,
@@ -268,6 +269,7 @@ export function App() {
   const extraBodyText =
     extraBodyDraft ?? JSON.stringify(settings.openai.extraBody, null, 2)
   const extraBodyStatus = parseExtraBodyParams(extraBodyText)
+  const glossaryStatus = parseGlossary(settings.glossary)
 
   function update(patch: Partial<Settings>) {
     setSettings({ ...settings!, ...patch })
@@ -464,6 +466,34 @@ export function App() {
           </section>
 
           <section className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Glossary</Label>
+              <Textarea
+                value={settings.glossary}
+                onChange={(e) => update({ glossary: e.target.value })}
+                placeholder={
+                  '! One term per line\nTransformer = 变换器\nKubernetes = 库伯内特斯'
+                }
+                className="min-h-32 font-mono text-xs"
+              />
+              {glossaryStatus.ok ? (
+                <p className="text-xs text-muted-foreground">
+                  {glossaryStatus.value.length} term
+                  {glossaryStatus.value.length === 1 ? '' : 's'} — applied to
+                  every translation, overriding what the provider would pick.
+                </p>
+              ) : (
+                <p className="text-xs text-destructive">{glossaryStatus.error}</p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Fixes the rendering of a term everywhere it appears, which is
+                what keeps proper nouns from drifting between blocks. Lines
+                starting with {'!'} are comments. Used by Google Translate and
+                the OpenAI-compatible provider; Microsoft and Imp Credits cannot
+                apply it.
+              </p>
+            </div>
+
             <div className="flex items-start gap-2">
               <Checkbox
                 id="developer-mode"

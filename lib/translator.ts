@@ -2,6 +2,8 @@ import { toGoogleMarkupSource } from './align'
 import type { Settings } from './storage'
 import { applyRequestInterceptors, type OpenAIRequest } from './interceptors'
 import { renderSystemPrompt } from './prompt'
+import { parseGlossary, type GlossaryEntry } from './glossary'
+import { maskTerms, restoreTerms } from './term-sentinel'
 import { applyCustomParams } from './openai-params'
 import { createRateLimiter } from './rate-limiter'
 
@@ -245,11 +247,16 @@ function escapeHtml(s: string): string {
 async function translateGoogle(
   texts: string[],
   targetLang: string,
+  terms: GlossaryEntry[],
 ): Promise<TranslationResult> {
+  // Terms are masked before the markup pass, so the sentinel travels as run
+  // text and comes back escaped-decoded alongside it. Masking after would put
+  // a sentinel outside every marker and lose its owner on the way home.
+  const masked = texts.map((text) => maskTerms(text, terms))
   // Run markers must reach the endpoint as raw markup — escaping them turns
   // them into inert text and the response comes back unmarked. See
   // toGoogleMarkupSource for the measurements behind that.
-  const payload = texts.map((text) => toGoogleMarkupSource(text, escapeHtml))
+  const payload = masked.map((m) => toGoogleMarkupSource(m.text, escapeHtml))
   const resp = await fetch(
     'https://translate-pa.googleapis.com/v1/translateHtml',
     {
@@ -268,8 +275,40 @@ async function translateGoogle(
   const translated = data[0] as string[]
   const detectedLangs = data[1] as string[] | undefined
 
+  const restored = masked.map((m, i) => restoreTerms(decodeHTML(translated[i] ?? ''), m.bindings))
+
+  // A sentinel the provider mangled or dropped means this block was translated
+  // with the term hidden: the sentence reads fine but the term is gone, and the
+  // user asked for it to be there. Resend those blocks unmasked and take the
+  // provider's own rendering — the honest answer, rather than a hole in the text.
+  const lost = restored.flatMap((r, i) => (r.unresolved.length > 0 || r.lost ? [i] : []))
+  const fallback = new Map<number, string>()
+  if (lost.length > 0) {
+    const resend = await fetch(
+      'https://translate-pa.googleapis.com/v1/translateHtml',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json+protobuf',
+          'X-Goog-API-Key': GOOGLE_TRANSLATE_HTML_KEY,
+        },
+        body: JSON.stringify([
+          [lost.map((i) => toGoogleMarkupSource(texts[i]!, escapeHtml)), 'auto', targetLang],
+          'te_lib',
+        ]),
+      },
+    )
+    if (resend.ok) {
+      const retryData = (await resend.json()) as [string[]]
+      lost.forEach((i, k) => {
+        const t = retryData[0]?.[k]
+        if (t !== undefined) fallback.set(i, decodeHTML(t))
+      })
+    }
+  }
+
   return {
-    texts: translated.map((t) => decodeHTML(t)),
+    texts: restored.map((r, i) => fallback.get(i) ?? r.text),
     detectedLang: detectedLangs?.[0],
   }
 }
@@ -282,6 +321,7 @@ async function translateOpenAI(
   texts: string[],
   targetLang: string,
   settings: Settings,
+  terms: GlossaryEntry[],
 ): Promise<TranslationResult> {
   const {
     apiKey,
@@ -294,7 +334,7 @@ async function translateOpenAI(
   if (!apiKey) throw new Error('OpenAI API key is not configured')
   if (!baseUrl) throw new Error('Base URL is not configured')
 
-  const prompt = renderSystemPrompt(systemPrompt, targetLang)
+  const prompt = renderSystemPrompt(systemPrompt, targetLang, terms)
   const single = texts.length === 1
   const userContent = single
     ? texts[0]
@@ -446,13 +486,22 @@ export async function translate(
 ): Promise<TranslationResult> {
   if (texts.length === 0) return { texts: [] }
 
+  // The OpenAI path gets the glossary as prompt instructions; Google gets it
+  // as sentinels in the text, since it has no prompt to put it in. Microsoft
+  // is a measured unknown (lib/term-sentinel.ts) and Imp is a server-side
+  // black box, so neither is passed terms rather than being passed terms that
+  // may or may not survive. A parse failure degrades to no terms everywhere —
+  // translating without them beats not translating.
+  const parsed = parseGlossary(settings.glossary)
+  const terms: GlossaryEntry[] = parsed.ok ? parsed.value : []
+
   switch (settings.provider) {
     case 'microsoft':
       return translateMicrosoft(texts, targetLang)
     case 'google':
-      return translateGoogle(texts, targetLang)
+      return translateGoogle(texts, targetLang, terms)
     case 'openai':
-      return translateOpenAI(texts, targetLang, settings)
+      return translateOpenAI(texts, targetLang, settings, terms)
     case 'imp':
       return translateImp(texts, targetLang, settings)
     default:

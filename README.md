@@ -47,6 +47,7 @@ Copyright (C) 2026 rxliuli (original Imp Translate). Full license text in [LICEN
 - Two render modes, switchable with a two-button toggle from the popup, options page, or mobile toast bar: bilingual (translation below the original text) and translation-only (translation replaces the text in place, preserving size, colors, clickable links, and animations)
 - Translation-only replaces text in the original text nodes, so styles, listeners, and animations survive untouched. A block whose translated segments cannot be reliably mapped back keeps its original text rather than splitting a link's wording — see [docs/translation-only-alignment.md](docs/translation-only-alignment.md)
 - Supports Google, Microsoft, Imp Credits, and OpenAI-compatible translation providers
+- A user glossary pins the rendering of a term everywhere it appears, so proper nouns and product names stop drifting between blocks — see [docs/glossary.md](docs/glossary.md)
 - Smart DOM walker: only translates visible content, handles SPAs, lazy-loaded content, and dynamic text changes
 - Site-specific rules for skipping or targeting content areas
 - Configurable toggle shortcut, `Alt+T` by default, recordable and disable-able from the options page — see [docs/hotkey.md](docs/hotkey.md)

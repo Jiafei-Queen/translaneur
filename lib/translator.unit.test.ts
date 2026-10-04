@@ -67,6 +67,7 @@ const openaiSettings: Settings = {
   developerMode: false,
   debugMode: false,
   customRules: '',
+  glossary: '',
   hotkey: 'Alt+T',
   openai: {
     apiKey: 'test-key',
@@ -294,6 +295,7 @@ const msSettings: Settings = {
   developerMode: false,
   debugMode: false,
   customRules: '',
+  glossary: '',
   hotkey: 'Alt+T',
   openai: {
     apiKey: '',
@@ -601,6 +603,7 @@ const impSettings: Settings = {
   developerMode: false,
   debugMode: false,
   customRules: '',
+  glossary: '',
   hotkey: 'Alt+T',
   openai: {
     apiKey: '',
@@ -725,26 +728,169 @@ describe('Imp Credits translate', () => {
 
 const googleSettings: Settings = { ...msSettings, provider: 'google' }
 
+// Module scope, not scoped to the Google describe below: the glossary block
+// needs it too, to prove a glossary never reaches a provider that cannot act
+// on it.
+function mockGoogleResponse(texts: string[]) {
+  const fetchMock = vi.fn()
+  vi.stubGlobal('fetch', fetchMock)
+  fetchMock.mockResolvedValue({
+    ok: true,
+    json: async () => [texts, ['en']],
+  })
+  return fetchMock
+}
+
+/** The text payload of the nth Google request (0 = the first). */
+function sentTexts(
+  fetchMock: ReturnType<typeof mockGoogleResponse>,
+  call = 0,
+): string[] {
+  return JSON.parse(fetchMock.mock.calls[call]![1].body as string)[0][0]
+}
+
+// Two mechanisms, one feature. OpenAI takes the glossary as prompt
+// instructions; Google takes it as sentinels in the text, because it has no
+// prompt to put it in. Both are asserted here so neither can be "simplified"
+// into the other.
+describe('glossary injection', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.restoreAllMocks()
+  })
+
+  const systemOf = (fetchMock: ReturnType<typeof vi.fn>) =>
+    JSON.parse(fetchMock.mock.calls[0][1].body as string).messages[0].content as string
+
+  it('sends no glossary section when the field is empty', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockResolvedValue(mockOpenAIResponse('你好'))
+
+    const { translate } = await import('./translator')
+    await translate(['Hello'], 'zh', openaiSettings)
+
+    expect(systemOf(fetchMock)).not.toContain('Glossary')
+  })
+
+  it('sends each parsed term in the system prompt', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockResolvedValue(mockOpenAIResponse('你好'))
+
+    const { translate } = await import('./translator')
+    await translate(['Hello'], 'zh', {
+      ...openaiSettings,
+      glossary: 'Transformer = 变换器\n! a comment\nKubernetes = 库伯内特斯',
+    })
+
+    const sys = systemOf(fetchMock)
+    expect(sys).toContain('- "Transformer" → "变换器"')
+    expect(sys).toContain('- "Kubernetes" → "库伯内特斯"')
+    expect(sys).not.toContain('a comment')
+  })
+
+  // A half-typed line is normal while editing. The options page reports it;
+  // the request path must still translate, just without the terms.
+  it('degrades to no glossary when the text does not parse', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockResolvedValue(mockOpenAIResponse('你好'))
+
+    const { translate } = await import('./translator')
+    const result = await translate(['Hello'], 'zh', {
+      ...openaiSettings,
+      glossary: 'good = 好\nbroken line',
+    })
+
+    expect(result.texts).toEqual(['你好'])
+    expect(systemOf(fetchMock)).not.toContain('Glossary')
+  })
+
+  // Google takes no prompt, so a term reaches it as a sentinel in the text
+  // rather than as an instruction. Asserted here because the two paths are
+  // deliberately different mechanisms, and the Google one is easy to break by
+  // "simplifying" the prompt path to match.
+  it('sends terms to Google as sentinels, not as a prompt section', async () => {
+    const fetchMock = mockGoogleResponse(['汞是一种化学元素。'])
+    const { translate } = await import('./translator')
+
+    const result = await translate(['Mercury is a chemical element.'], 'zh', {
+      ...googleSettings,
+      glossary: 'Mercury = 汞',
+    })
+
+    const sent = sentTexts(fetchMock)
+    expect(sent[0]).toMatch(/ZQX\d{1,4}QXZ/)
+    expect(sent[0]).not.toContain('Mercury')
+    expect(result.texts).toEqual(['汞是一种化学元素。'])
+  })
+
+  it('sends no sentinel when the text has no glossary term', async () => {
+    const fetchMock = mockGoogleResponse(['你好'])
+    const { translate } = await import('./translator')
+
+    await translate(['Hello'], 'zh', { ...googleSettings, glossary: 'Mercury = 汞' })
+
+    expect(sentTexts(fetchMock)).toEqual(['Hello'])
+  })
+
+  // A dropped sentinel means the block was translated with the term hidden and
+  // reads fine but is missing the term. Redoing it unmasked yields the
+  // provider's own rendering, which is a real translation rather than a hole.
+  it('resends a block unmasked when the provider drops the sentinel', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    // First call: sentinel gone. Second: the unmasked retry.
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: async () => [['是一种化学元素。'], ['en']] })
+      .mockResolvedValueOnce({ ok: true, json: async () => [['汞是一种化学元素。'], ['en']] })
+
+    const { translate } = await import('./translator')
+    const result = await translate(['Mercury is a chemical element.'], 'zh', {
+      ...googleSettings,
+      glossary: 'Mercury = 汞',
+    })
+
+    expect(result.texts).toEqual(['汞是一种化学元素。'])
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(sentTexts(fetchMock, 1)[0]).toContain('Mercury')
+  })
+
+  it('does not retry when every sentinel came back', async () => {
+    // The response has to echo the sentinel, which is what a real provider
+    // does — a mock that returns finished text without it is describing a
+    // dropped sentinel, and is the previous test's scenario.
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+      const sent = JSON.parse(init.body as string)[0][0][0] as string
+      const m = /ZQX\d{1,4}QXZ/.exec(sent)
+      return {
+        ok: true,
+        // Echo only the sentinel back, as a real provider does; the rest of
+        // the sentence comes back translated.
+        json: async () => [[m![0] + '是一种化学元素。'], ['en']],
+      }
+    })
+
+    const { translate } = await import('./translator')
+    const result = await translate(['Mercury is a chemical element.'], 'zh', {
+      ...googleSettings,
+      glossary: 'Mercury = 汞',
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(result.texts).toEqual(['汞是一种化学元素。'])
+  })
+})
+
 describe('Google translateHtml marker passthrough', () => {
   beforeEach(() => {
     vi.resetModules()
     vi.restoreAllMocks()
     cacheStore.clear()
   })
-
-  function mockGoogleResponse(texts: string[]) {
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => [texts, ['en']],
-    })
-    return fetchMock
-  }
-
-  function sentTexts(fetchMock: ReturnType<typeof mockGoogleResponse>): string[] {
-    return JSON.parse(fetchMock.mock.calls[0]![1].body as string)[0][0]
-  }
 
   it('sends run markers as raw markup and escapes only run text', async () => {
     const fetchMock = mockGoogleResponse(['<x id="1"></x>甲<x id="2"></x>乙'])
