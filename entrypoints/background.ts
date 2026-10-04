@@ -66,6 +66,11 @@ async function setTabTranslatingLang(tabId: number, lang: string | null) {
   }
 }
 
+// Chromium has no theme-aware toolbar icon API: no `theme_icons`, raster
+// formats only, and no theme-change event. The same pixels therefore have to
+// read on both the light and the dark toolbar, which caps the artwork at
+// mid-luminance colours. Neutral grey while idle, brand blue while
+// translating: white disappears on a light toolbar, near-black on a dark one.
 const defaultIcon: Record<number, PublicPath> = {
   16: '/icon/16.png',
   32: '/icon/32.png',
