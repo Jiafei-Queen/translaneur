@@ -1,3 +1,5 @@
+import { DEFAULT_HOTKEY } from './hotkey'
+
 export type TranslationProvider = 'microsoft' | 'google' | 'openai' | 'imp'
 
 export type RenderMode = 'bilingual' | 'translation-only'
@@ -24,6 +26,11 @@ export interface Settings {
   developerMode: boolean
   customRules: string
   debugMode: boolean
+  // WebExtension shortcut string for the toggle command ('Alt+T'), or ''
+  // meaning "off". This is the extension's record of intent; the browser's
+  // real binding is read from browser.commands.getAll() and can differ on
+  // Chrome, which refuses to let extensions assign shortcuts.
+  hotkey: string
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -33,6 +40,7 @@ const DEFAULT_SETTINGS: Settings = {
   developerMode: false,
   debugMode: false,
   customRules: '',
+  hotkey: DEFAULT_HOTKEY,
   openai: {
     apiKey: '',
     baseUrl: 'https://api.openai.com/v1',

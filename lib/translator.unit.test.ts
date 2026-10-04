@@ -67,6 +67,7 @@ const openaiSettings: Settings = {
   developerMode: false,
   debugMode: false,
   customRules: '',
+  hotkey: 'Alt+T',
   openai: {
     apiKey: 'test-key',
     baseUrl: 'https://api.example.com/v1',
@@ -216,6 +217,7 @@ const msSettings: Settings = {
   developerMode: false,
   debugMode: false,
   customRules: '',
+  hotkey: 'Alt+T',
   openai: {
     apiKey: '',
     baseUrl: '',
@@ -518,6 +520,7 @@ const impSettings: Settings = {
   developerMode: false,
   debugMode: false,
   customRules: '',
+  hotkey: 'Alt+T',
   openai: {
     apiKey: '',
     baseUrl: '',

@@ -1,0 +1,163 @@
+# Toggle shortcut
+
+The extension exposes one keyboard command, `toggle-translate`, which
+translates the current page or restores the original text. It is handled by
+the browser's `commands` channel, not by a listener injected into the page.
+
+The browser owns the key it dispatches, and reports it back in its own
+notation. On macOS the active binding reads as `⌥T` rather than `Alt+T`; both
+mean the same physical combination.
+
+## Default
+
+`Alt+T`.
+
+This is declared as the command's `suggested_key` in `wxt.config.ts`, so the
+browser seeds the binding on install. A browser profile that already has a
+binding from an earlier install keeps it — the manifest default only applies on
+first install or when the extension is reloaded.
+
+## Changing it
+
+Open the options page and scroll to **Toggle Shortcut**.
+
+Recording is only available on browsers that can apply the result, which today
+means Firefox. On Chrome the field is read-only — see
+[Chrome cannot apply the shortcut for you](#chrome-cannot-apply-the-shortcut-for-you).
+
+On a browser that supports it:
+
+1. Click the button showing the current shortcut. It turns into `Press keys…`.
+2. Press the combination you want.
+3. The recorded value is saved and shown as e.g. `Alt + Shift + K`.
+
+While recording:
+
+- `Escape` cancels and leaves the stored shortcut unchanged.
+- `Backspace` or `Delete` clears the shortcut, turning the hotkey off.
+- An invalid combination is rejected with an inline reason, and recording stays
+  open so you can try again.
+
+The **Clear** button next to the shortcut turns the hotkey off without entering
+recording mode. When the shortcut is off the button reads `Not set`, and the
+shortcut stops being bound.
+
+### Rules a combination must follow
+
+- It must include `Alt` or `Ctrl`. A bare key would intercept that key on every
+  page you visit, so it is refused.
+- `Ctrl`+`Alt` together is refused. Chrome does not accept it at all, and
+  keeping recordings portable is worth more than the extra combination.
+- `Command`/`Meta` is refused. On macOS the browser's own menu consumes
+  `Cmd`+letter before extension shortcuts are consulted, so such a binding
+  could never fire.
+
+Recording is keyed off `KeyboardEvent.code`, never `KeyboardEvent.key`. On
+macOS, `Option`+letter often reports a composed character (`Option`+`A` is
+`å`) or a dead key — `Option`+`E`, `+I`, `+N` and `+U` all report `key` as
+`Dead`. Reading the character would discard the only event carrying the real
+key and make those combinations look unbindable, even though the browser
+accepts all of them. `code` names the physical key and is stable across
+layouts and compose state.
+
+## Control on macOS
+
+On macOS the WebExtension shortcut grammar does not mean what the keycaps say:
+`Ctrl` is an alias for `Command`, and a real Control binding has to be spelled
+`MacCtrl`. Both engines apply the same rule, in opposite directions when they
+report a shortcut back — Chrome's `NormalizeShortcutSuggestion` and Firefox's
+`chromeModifierKeyMap` each map `Ctrl` onto the platform's command key. A
+`Ctrl`+letter shortcut on macOS therefore binds `Cmd`+letter, silently and
+successfully, and never fires when the user presses Control.
+
+The extension keeps one dialect and translates at the boundary:
+
+- `settings.hotkey`, the recorder and every piece of display text speak the
+  platform-neutral form, `Ctrl+T`.
+- `toBrowserShortcut()` rewrites `Ctrl` to `MacCtrl` on macOS only, just before
+  `commands.update()`.
+- `toStoredShortcut()` rewrites it back on the way out of `getAll()`, so the
+  active-binding line reads `Ctrl + T` instead of leaking `MacCtrl + T`.
+
+Keeping the stored value platform-neutral is what lets one profile's shortcut
+mean the same thing on Windows and Linux, where `MacCtrl` is not a valid token
+at all. Only the two browser-facing values differ, and they differ only on macOS.
+
+`MacCtrl` is accepted by validation for the same reason: it is the token a
+browser reports back, so a `getAll()` result has to survive `isBindableHotkey`.
+`Command` remains refused, because the recorder rejects `Meta` and no stored
+value can carry it.
+
+Both engines map `MacCtrl` to a real Control key, so the rewrite is safe on
+either: Firefox's `chromeModifierKeyMap` lists `MacCtrl: "control"` alongside
+`Ctrl: "accel"`, and Chromium normalizes the same way. Firefox's
+`commands.update()` does not even validate the shortcut — it stores the string
+after trimming it — so a `MacCtrl` binding is accepted there rather than
+silently ignored.
+
+## Chrome cannot apply the shortcut for you
+
+Chrome's `commands` API exposes only `getAll()` — there is no `update()` and no
+`reset()`. An extension therefore cannot assign its own shortcut on Chrome; the
+binding lives in the browser's preferences and only you can change it.
+
+The options page reflects this rather than pretending otherwise: on Chrome the
+shortcut field is read-only, the page shows **Chrome does not let extensions
+assign shortcuts**, and a button opens `chrome://extensions/shortcuts`, which
+is where you type the combination to actually activate it. The field displays
+the binding the browser really has — read via `getAll()`, which Chrome does
+support — not a stored preference, so the two can never be confused. When the
+browser has no binding at all the field reads `Not set`; it never falls back to
+the stored preference, because `getSettings()` merges `DEFAULT_SETTINGS.hotkey`
+and that fallback would invent a shortcut with nothing behind it. The
+recorder is disabled on Chrome, because saving a preference that can never
+fire is how the previous "Saved!" lie happened.
+
+The binding also changes outside the page: it lives in browser preferences, and
+`storage.onChanged` cannot observe those. The options page therefore re-reads
+it on mount and again whenever the tab becomes visible or regains focus, which
+covers the user's path back from `chrome://extensions/shortcuts` — otherwise
+the field kept showing whatever was bound when the page first loaded.
+
+Firefox does implement `commands.update()`, so there the combination is
+recorded as usual, applied immediately, and reported as the binding the
+browser actually has (for example `Currently active: Alt + T`).
+
+The capability is feature-detected rather than sniffed from the browser name, so
+if Chrome ever ships `update()` this limitation disappears with no code change.
+
+## Why not a page-level key listener
+
+A content script that listens for keypresses would be simpler to control, and
+would let a binding work regardless of what the browser reserves. It is
+deliberately not used here:
+
+- The extension injects nothing into a page until translation starts, in order
+  to keep the default experience free of any per-page overhead. A key listener
+  would mean injecting into every page, all the time.
+- A listener only exists on tabs that are already translating, so the hotkey
+  could not start a translation in the first place — only undo one. The
+  `commands` channel is the only way to toggle from a cold tab.
+
+## Implementation notes
+
+- `lib/hotkey.ts` owns the shortcut-string rules: validation and formatting for
+  display, and conversion from a `KeyboardEvent` to a shortcut string. Both the
+  options page and the background use it so they cannot disagree.
+- The shortcut is stored in `settings.hotkey` as a plain string. `''` means off.
+- `lib/message.ts` carries `setHotkey` and `getHotkeyState` between the options
+  page and the background. `getHotkeyState` returns only `active` and
+  `canApply`. It once also returned `saved`, the stored preference, which the
+  options page read from `settings` anyway and never displayed.
+- On browsers that cannot bind shortcuts, the field shows `active` alone. The
+  `getSettings()` call merges `DEFAULT_SETTINGS.hotkey`, so treating the stored
+  value as a fallback would show a shortcut the browser has no binding for.
+- The background re-applies the stored shortcut on install and on browser
+  startup, because a service worker restart does not reset the binding on
+  browsers that support `update()`.
+- The background registers `commands.onCommand` whenever that API exists. It is
+  feature-detected rather than gated on the build target: an
+  `import.meta.env.BROWSER !== 'firefox'` guard was a build-time constant, so
+  the bundler stripped the listener out of the Firefox build and the hotkey did
+  nothing there while the options page still claimed it was active. Only Firefox
+  Android lacks `commands`, and it has no keyboard to bind.

@@ -52,7 +52,7 @@ export default defineConfig({
       commands: {
         'toggle-translate': {
           suggested_key: {
-            default: 'Alt+A',
+            default: 'Alt+T',
           },
           description: 'Toggle page translation',
         },

@@ -59,6 +59,35 @@ export async function getServiceWorker(context: BrowserContext) {
   return sw
 }
 
+// Chrome has no commands.update(), so a test cannot change the binding the way
+// a user does. Override getAll() in the service worker instead: the background
+// calls it on every getHotkeyState, so the options page reads whatever this
+// returns. Call again to change or clear the override.
+export async function stubBrowserShortcut(
+  context: BrowserContext,
+  shortcut: string,
+) {
+  const sw = await getServiceWorker(context)
+  await sw.evaluate((shortcut) => {
+    const g = globalThis as {
+      __getAllOrig?: typeof chrome.commands.getAll
+      __shortcutOverride?: string
+    }
+    if (!g.__getAllOrig) {
+      g.__getAllOrig = chrome.commands.getAll.bind(chrome.commands)
+      chrome.commands.getAll = async () => {
+        const all = await g.__getAllOrig!()
+        return all.map((c) =>
+          c.name === 'toggle-translate'
+            ? { ...c, shortcut: g.__shortcutOverride ?? c.shortcut }
+            : c,
+        )
+      }
+    }
+    g.__shortcutOverride = shortcut
+  }, shortcut)
+}
+
 export async function getTabId(page: Page): Promise<number> {
   const url = page.url()
   const sw = await getServiceWorker(page.context())

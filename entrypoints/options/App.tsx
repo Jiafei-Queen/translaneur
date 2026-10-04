@@ -8,6 +8,7 @@ import {
 import { chatCompletionsUrl, translate } from '@/lib/translator'
 import { messager } from '@/lib/message'
 import { IMP_CONNECT_URL } from '@/lib/imp'
+import { formatHotkey, hotkeyFromEvent } from '@/lib/hotkey'
 import { browser } from 'wxt/browser'
 import { LANGUAGES_SORTED } from '@/lib/languages'
 import { Input } from '@/components/ui/input'
@@ -73,6 +74,22 @@ export function App() {
     msg: string
   } | null>(null)
   const [refreshingRules, setRefreshingRules] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const [recordingHint, setRecordingHint] = useState<string | null>(null)
+  const [hotkeyState, setHotkeyState] = useState<{
+    active: string
+    canApply: boolean
+  } | null>(null)
+  // Tri-state on purpose. A plain boolean starting at `false` would paint an
+  // enabled recorder until getHotkeyState answers, and a click landing in
+  // that window starts recording on a browser that cannot bind anything —
+  // leaving a disabled button stuck on "Press keys…". Unknown stays disabled.
+  // 'error' is separate from 'read-only' so the note can admit the query
+  // failed instead of blaming Chrome for it.
+  const [hotkeyCapability, setHotkeyCapability] = useState<
+    'unknown' | 'apply' | 'read-only' | 'error'
+  >('unknown')
+  const hotkeyReadOnly = hotkeyCapability === 'read-only'
   const [refreshResult, setRefreshResult] = useState<{
     ok: boolean
     msg: string
@@ -99,6 +116,39 @@ export function App() {
     }
     browser.storage.onChanged.addListener(listener)
     return () => browser.storage.onChanged.removeListener(listener)
+  }, [])
+
+  // The browser's real binding is not ours: it lives in browser prefs and
+  // changes at chrome://extensions/shortcuts, which no storage event this page
+  // can observe. Re-read on mount and on every return to the tab, since that is
+  // how a Chrome user changes it. canApply also decides whether this page may
+  // record a shortcut at all.
+  function refreshHotkeyState() {
+    messager
+      .sendMessage('getHotkeyState')
+      .then((state) => {
+        setHotkeyState(state)
+        setHotkeyCapability(state.canApply ? 'apply' : 'read-only')
+      })
+      // Stay disabled on failure: a shortcut we could not verify is not one
+      // we should offer to change, and the note below says which it was.
+      .catch(() => setHotkeyCapability('error'))
+  }
+
+  useEffect(() => {
+    refreshHotkeyState()
+
+    // visibilitychange also fires while hidden; re-reading then would be a
+    // round-trip for a page nobody is looking at.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refreshHotkeyState()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', refreshHotkeyState)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', refreshHotkeyState)
+    }
   }, [])
 
   // Auto-verify the stored Imp key when the options page opens (and whenever
@@ -130,6 +180,55 @@ export function App() {
       cancelled = true
     }
   }, [impConnected, settings?.imp?.apiKey, settings?.imp?.baseUrl])
+
+  // Persists the preference and asks the background to bind it where the
+  // browser allows. Reachable only on canApply browsers — a canApply:false
+  // browser renders this control read-only, so no caller here ever observes
+  // a failed apply.
+  function commitHotkey(hotkey: string) {
+    update({ hotkey })
+    void (async () => {
+      try {
+        await messager.sendMessage('setHotkey', { hotkey })
+        setHotkeyState(await messager.sendMessage('getHotkeyState'))
+      } catch {}
+    })()
+  }
+
+  // Recording listens on window rather than on the button, so it survives
+  // focus moving elsewhere mid-recording. The component re-runs this effect
+  // whenever the stored value changes, so commitHotkey can read the latest
+  // settings rather than capturing a stale closure.
+  useEffect(() => {
+    if (!recording) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.key === 'Escape') {
+        setRecording(false)
+        setRecordingHint(null)
+        return
+      }
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        setRecording(false)
+        setRecordingHint(null)
+        commitHotkey('')
+        return
+      }
+      const next = hotkeyFromEvent(e)
+      if (!next) {
+        // Stay in recording mode: an invalid combination must not silently
+        // end the interaction, or the user gets no feedback at all.
+        setRecordingHint('Use Alt or Ctrl plus one key. Ctrl+Alt is not allowed.')
+        return
+      }
+      setRecording(false)
+      setRecordingHint(null)
+      commitHotkey(next)
+    }
+    window.addEventListener('keydown', onKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', onKeyDown, { capture: true })
+  }, [recording, settings?.hotkey])
 
   function connectImp() {
     browser.tabs.create({ url: IMP_CONNECT_URL })
@@ -271,6 +370,111 @@ export function App() {
               </label>
             ))}
           </RadioGroup>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <div>
+          <h2 className="font-semibold">Toggle Shortcut</h2>
+          <p className="text-sm text-muted-foreground">
+            Keyboard shortcut that translates or restores the current page.
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <Button
+              id="hotkey"
+              variant="outline"
+              size="sm"
+              className="font-mono"
+              aria-label="Toggle shortcut"
+              disabled={hotkeyCapability !== 'apply'}
+              // A disabled button swallows hover, so the reason it is
+              // disabled has to live in the title as well as the note below.
+              title={
+                hotkeyReadOnly
+                  ? 'Chrome does not let extensions assign shortcuts'
+                  : undefined
+              }
+              onClick={() => {
+                setRecordingHint(null)
+                setRecording(true)
+              }}
+            >
+              {recording
+                ? 'Press keys…'
+                : hotkeyReadOnly
+                  ? // What the browser will really fire, and nothing else.
+                    // Falling back to settings.hotkey re-creates the "saved
+                    // but never applied" lie: getSettings() merges
+                    // DEFAULT_SETTINGS.hotkey, so a stored value can exist
+                    // with no binding behind it.
+                    hotkeyState?.active
+                    ? formatHotkey(hotkeyState.active)
+                    : 'Not set'
+                  : settings.hotkey
+                    ? formatHotkey(settings.hotkey)
+                    : 'Not set'}
+            </Button>
+            {settings.hotkey !== '' && !recording && !hotkeyReadOnly && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => commitHotkey('')}
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+          {hotkeyCapability === 'apply' && (
+            <p className="text-xs text-muted-foreground">
+              Click the button, then press a combination. Backspace clears it,
+              Escape cancels.
+            </p>
+          )}
+          {recording && recordingHint && (
+            <p className="text-xs text-destructive">{recordingHint}</p>
+          )}
+          {hotkeyCapability === 'apply' &&
+            (hotkeyState?.active ? (
+              <p className="text-xs text-muted-foreground">
+                Currently active: {formatHotkey(hotkeyState.active)}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Not active in the browser.
+              </p>
+            ))}
+          {hotkeyCapability === 'error' && (
+            <p className="text-xs text-muted-foreground">
+              Could not read the browser's shortcut settings, so the field
+              above is read-only here. Reload to try again.
+            </p>
+          )}
+          {hotkeyReadOnly && (
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">
+                Chrome does not let extensions assign shortcuts. The field above
+                is read-only here, so finish the binding in the browser's
+                shortcut settings.
+              </p>
+              <Button
+                variant="link"
+                size="sm"
+                className="h-auto p-0"
+                onClick={() => {
+                  // Chrome blocks navigation to some chrome:// URLs; failing
+                  // quietly beats an unhandled rejection in the console.
+                  void browser.tabs
+                    .create({ url: 'chrome://extensions/shortcuts' })
+                    .catch(() => {})
+                }}
+              >
+                Open browser shortcut settings
+              </Button>
+            </div>
+          )}
         </div>
       </section>
 

@@ -49,6 +49,7 @@ Copyright (C) 2026 rxliuli (original Imp Translate). Full license text in [LICEN
 - Supports Google, Microsoft, Imp Credits, and OpenAI-compatible translation providers
 - Smart DOM walker: only translates visible content, handles SPAs, lazy-loaded content, and dynamic text changes
 - Site-specific rules for skipping or targeting content areas
+- Configurable toggle shortcut, `Alt+T` by default, recordable and disable-able from the options page — see [docs/hotkey.md](docs/hotkey.md)
 - Shadow DOM isolation for injected UI
 
 ## Development

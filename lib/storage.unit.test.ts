@@ -59,6 +59,25 @@ describe('storage', () => {
     expect(settings.provider).toBe('google')
   })
 
+  it('hotkey defaults to Alt+T for new and pre-existing installs', async () => {
+    const { getSettings } = await import('./storage')
+    expect((await getSettings()).hotkey).toBe('Alt+T')
+
+    // A profile stored before the hotkey existed has no such key and must
+    // still read back as the new default, not undefined.
+    localStore.set('settings', { provider: 'google' })
+    expect((await getSettings()).hotkey).toBe('Alt+T')
+  })
+
+  it('an empty hotkey means off and round-trips instead of falling back', async () => {
+    const { saveSettings, getSettings } = await import('./storage')
+    await saveSettings({ hotkey: '' })
+    expect((await getSettings()).hotkey).toBe('')
+
+    await saveSettings({ hotkey: 'Alt+Shift+K' })
+    expect((await getSettings()).hotkey).toBe('Alt+Shift+K')
+  })
+
   it('saving nested openai config persists correctly', async () => {
     const { saveSettings, getSettings } = await import('./storage')
     const openai = {

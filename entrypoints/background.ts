@@ -10,6 +10,7 @@ import { getEffectiveRules, setupRemoteRulesAlarm, fetchRemoteRulesIfNeeded } fr
 import { PublicPath } from 'wxt/browser'
 import { debugTime, isPdfUrl } from '@/lib/utils'
 import { IMP_ORIGIN } from '@/lib/imp'
+import { TOGGLE_COMMAND, toBrowserShortcut, toStoredShortcut } from '@/lib/hotkey'
 
 async function getMatchedRulesForHostname(hostname: string): Promise<SiteRule[]> {
   const effectiveRules = await getEffectiveRules()
@@ -185,24 +186,87 @@ function setupCacheCleanupAlarm() {
   })
 }
 
+// Chrome's commands API exposes only getAll(); commands.update() is
+// Firefox-only, so on Chrome the binding lives in browser prefs and only the
+// user can change it. The cast is required because @wxt-dev/browser's type
+// surface omits update() entirely; it is the one unchecked shape in this
+// file, isolated here so the probe cannot be mistaken for a typed value.
+type CommandsWithUpdate = typeof browser.commands & {
+  update?: (details: { name: string; shortcut: string }) => Promise<void>
+}
+
+function commandsUpdate() {
+  return (browser.commands as CommandsWithUpdate).update
+}
+
+async function applyHotkey(hotkey: string): Promise<boolean> {
+  const update = commandsUpdate()
+  if (!update) return false
+  try {
+    await update.call(browser.commands, {
+      name: TOGGLE_COMMAND,
+      // Storage keeps "Ctrl+K"; macOS needs "MacCtrl+K" to bind Control
+      // instead of Command.
+      shortcut: toBrowserShortcut(hotkey),
+    })
+    return true
+  } catch {
+    // The browser refuses shortcuts it considers invalid or reserved.
+    return false
+  }
+}
+
+async function syncHotkeyFromSettings() {
+  const { hotkey } = await getSettings()
+  await applyHotkey(hotkey)
+}
+
 export default defineBackground(() => {
   setupRemoteRulesAlarm()
   setupCacheCleanupAlarm()
 
-  browser.runtime.onInstalled.addListener(() => setupMobileAction())
-  browser.runtime.onStartup.addListener(() => setupMobileAction())
+  browser.runtime.onInstalled.addListener(async () => {
+    await setupMobileAction()
+    await syncHotkeyFromSettings()
+  })
+  browser.runtime.onStartup.addListener(async () => {
+    await setupMobileAction()
+    await syncHotkeyFromSettings()
+  })
 
   browser.action.onClicked.addListener(() => openPanelForActiveTab())
 
-  // browser.commands is unavailable on Firefox Android
+  // browser.commands is absent on Firefox Android, which has no keyboard to
+  // bind. Feature-detect rather than branch on the build target: a build-time
+  // BROWSER check stripped this listener from desktop Firefox, where
+  // onCommand is fully supported, so the hotkey did nothing at all.
   // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/commands#browser_compatibility
-  if (import.meta.env.BROWSER !== 'firefox') {
+  if (browser.commands?.onCommand) {
     browser.commands.onCommand.addListener(async (command) => {
-      if (command !== 'toggle-translate') return
+      if (command !== TOGGLE_COMMAND) return
       // Keyboard keeps the toggle — a keypress is deliberate.
       await toggleTranslationForActiveTab()
     })
   }
+
+  messager.onMessage('setHotkey', async ({ data }) => {
+    return { applied: await applyHotkey(data.hotkey) }
+  })
+
+  messager.onMessage('getHotkeyState', async () => {
+    const canApply = typeof commandsUpdate() === 'function'
+    // getAll() exists wherever commands does, Chrome included, so read the
+    // browser's real binding unconditionally. Gating it on canApply hid the
+    // very fact that makes the Chrome limitation legible: the user's stored
+    // preference and the shortcut Chrome will actually fire can differ.
+    const all = await browser.commands.getAll()
+    // The browser reports its own dialect; show the same one the user picked
+    // so the two lines below the button agree.
+    const active = toStoredShortcut(
+      all.find((c) => c.name === TOGGLE_COMMAND)?.shortcut ?? '',
+    )
+    return { active, canApply }
+  })
 
   messager.onMessage('getMatchedRulesForHostname', async ({ data }) => {
     return await getMatchedRulesForHostname(data.hostname)

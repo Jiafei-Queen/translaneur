@@ -46,6 +46,15 @@ export const messager = defineExtensionMessaging<{
   detectLanguageBatch(data: { texts: string[] }): string[]
   refreshRemoteRules(): void
 
+  // options page => background: apply the recorded shortcut. `applied` is
+  // false on Chrome, whose commands API has no update() — the real binding
+  // lives in browser prefs and can only be changed by the user at
+  // chrome://extensions/shortcuts.
+  setHotkey(data: { hotkey: string }): { applied: boolean }
+  // options page (on mount, and on every return to the tab) => background:
+  // where the browser allows reading it, the binding it actually has.
+  getHotkeyState(): { active: string; canApply: boolean }
+
   // Background → content script (entrypoints/inject.ts). Omitting frameId
   // broadcasts to every frame in the tab; passing it drives a single frame
   // (dynamically added iframes) without re-waking the already-translating
