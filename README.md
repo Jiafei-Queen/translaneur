@@ -55,6 +55,14 @@ Copyright (C) 2026 rxliuli (original Imp Translate). Full license text in [LICEN
 - Configurable shortcuts from the options page: `Alt+T` toggles translation, `Alt+R` re-translates the page from scratch (ignoring the cache) — see [docs/hotkey.md](docs/hotkey.md)
 - Shadow DOM isolation for injected UI
 
+## Install
+
+Translaneur is currently **not on any extension store**.
+You can download the build for your browser from the [releases page](https://github.com/Jiafei-Queen/translaneur/releases):
+
+> No Safari build is attached to a release — build one yourself with
+[`pnpm build:safari`](#build) (macOS + Xcode required).
+
 ## Development
 
 ```sh
