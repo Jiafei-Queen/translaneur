@@ -165,3 +165,22 @@ The page is split into two sections behind the switcher under the Translaneur wo
   selected.
 
 The switch opens on General each time and is not persisted.
+
+### Collapsed advanced fields
+
+`System Prompt` and `Extra Request Parameters` each collapse independently, both closed
+by default: the prompt runs to hundreds of words and the params are a JSON object, so
+the Provider form would otherwise be mostly that text above the batch caps users tune.
+Independent, not a shared switch — editing one says nothing about the other, and a
+shared switch would force both open to reach either.
+
+Collapsed, each row still reports its stored value:
+
+- the prompt row reads `Default prompt`, `Empty`, or the first line of a custom prompt;
+- the params row lists the keys that will be sent, or the parse error in red. The error
+  stays visible while collapsed deliberately — a malformed object is otherwise silent
+  until the next request fails.
+
+`Reset` sits inside the expanded params body, since it is only meaningful next to the
+text it resets. Collapsing unmounts the editors; an unparseable draft is held in React
+state above the stored value, so no edit is lost.

@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
+import { ChevronDownIcon } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import {
   getSettings,
   saveSettings,
@@ -40,6 +42,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import { DEFAULT_SYSTEM_PROMPT } from '@/lib/prompt'
 
 function humanizeOpenAIError(raw: string): string {
   if (raw.includes('401')) return 'Invalid API key.'
@@ -87,6 +95,52 @@ const DISPLAY_OPTIONS: readonly SegmentedOption<RenderMode>[] = [
   { value: 'translation-only', label: 'Translation only' },
 ]
 
+/**
+ * A settings field collapsed until asked for, with a one-line summary of what
+ * it holds so the value is readable without opening it.
+ */
+function CollapsibleField({
+  label,
+  summary,
+  summaryClassName,
+  open,
+  onOpenChange,
+  children,
+}: {
+  label: string
+  summary: ReactNode
+  /** Overrides the muted default, for a summary that reports a problem. */
+  summaryClassName?: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  children: ReactNode
+}) {
+  return (
+    <Collapsible open={open} onOpenChange={onOpenChange}>
+      <CollapsibleTrigger asChild>
+        <Button
+          variant="ghost"
+          className="group h-auto w-full justify-between px-1 py-1.5"
+        >
+          <span className="flex min-w-0 flex-col items-start gap-1">
+            <span className="text-sm leading-none font-medium">{label}</span>
+            <span
+              className={cn(
+                'max-w-full truncate text-xs font-normal text-muted-foreground',
+                summaryClassName,
+              )}
+            >
+              {summary}
+            </span>
+          </span>
+          <ChevronDownIcon className="size-4 shrink-0 transition-transform group-data-[state=closed]:-rotate-90" />
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="space-y-1.5">{children}</CollapsibleContent>
+    </Collapsible>
+  )
+}
+
 // Every command the shortcuts section records. The binding reads run over it,
 // so a field added to the section is wired here too.
 const HOTKEY_COMMANDS = [TOGGLE_COMMAND, RETRANSLATE_COMMAND]
@@ -103,6 +157,9 @@ export function App() {
   const [section, setSection] = useState<SettingsSection>('general')
   // null means "show what is stored"; a string means the user is mid-edit.
   const [extraBodyDraft, setExtraBodyDraft] = useState<string | null>(null)
+  // View-only, like the section switcher: not persisted.
+  const [promptOpen, setPromptOpen] = useState(false)
+  const [extraBodyOpen, setExtraBodyOpen] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{
     ok: boolean
@@ -290,6 +347,13 @@ export function App() {
     extraBodyDraft ?? JSON.stringify(settings.openai.extraBody, null, 2)
   const extraBodyStatus = parseExtraBodyParams(extraBodyText)
   const glossaryStatus = parseGlossary(settings.glossary)
+  // First line only — the whole prompt is too long for a collapsed row.
+  const systemPromptSummary =
+    settings.openai.systemPrompt.trim() === ''
+      ? 'Empty'
+      : settings.openai.systemPrompt === DEFAULT_SYSTEM_PROMPT
+        ? 'Default prompt'
+        : settings.openai.systemPrompt.trim().split('\n')[0]
 
   function update(patch: Partial<Settings>) {
     // Functional: a recorder's window-level keydown handler holds the closure
@@ -722,11 +786,17 @@ export function App() {
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <Label>System Prompt</Label>
+              <CollapsibleField
+                label="System Prompt"
+                summary={systemPromptSummary}
+                open={promptOpen}
+                onOpenChange={setPromptOpen}
+              >
                 <Textarea
                   value={settings.openai.systemPrompt}
-                  onChange={(e) => updateOpenAI({ systemPrompt: e.target.value })}
+                  onChange={(e) =>
+                    updateOpenAI({ systemPrompt: e.target.value })
+                  }
                   placeholder="You are a translator..."
                 />
                 <p className="text-xs text-muted-foreground">
@@ -734,38 +804,43 @@ export function App() {
                   placeholder. Any other {'{{placeholder}}'} is removed before
                   the prompt is sent.
                 </p>
-              </div>
+              </CollapsibleField>
 
-              <div className="space-y-1.5">
-                <Label>Extra Request Parameters</Label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setExtraBodyDraft(null)}
-                >
-                  Reset
-                </Button>
+              <CollapsibleField
+                label="Extra Request Parameters"
+                summary={
+                  extraBodyStatus.ok
+                    ? `Sent with every request: ${
+                        Object.keys(extraBodyStatus.value).join(', ') || 'none'
+                      }`
+                    : extraBodyStatus.error
+                }
+                summaryClassName={extraBodyStatus.ok ? undefined : 'text-destructive'}
+                open={extraBodyOpen}
+                onOpenChange={setExtraBodyOpen}
+              >
+                <div className="flex justify-end">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setExtraBodyDraft(null)}
+                  >
+                    Reset
+                  </Button>
+                </div>
                 <Textarea
                   value={extraBodyText}
                   onChange={(e) => commitExtraBody(e.target.value)}
                   placeholder='{ "temperature": 0 }'
                   className="min-h-32 font-mono text-xs"
                 />
-                {extraBodyStatus.ok ? (
-                  <p className="text-xs text-muted-foreground">
-                    Sent with every request:{' '}
-                    {Object.keys(extraBodyStatus.value).join(', ') || 'none'}
-                  </p>
-                ) : (
-                  <p className="text-xs text-destructive">{extraBodyStatus.error}</p>
-                )}
                 <p className="text-xs text-muted-foreground">
                   Merged into the request body after the built-in defaults, so
                   these win. Parameter names and shapes are provider-specific:
                   check your provider's documentation for what it accepts.
                   model, messages and stream are managed by the extension.
                 </p>
-              </div>
+              </CollapsibleField>
 
               <div className="space-y-1.5">
                 <Label>Max requests per second</Label>
