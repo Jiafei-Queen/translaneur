@@ -1,0 +1,60 @@
+# API compatibility
+
+Every WebExtension API this extension touches, checked against the
+[Thunderbird MV3 API documentation](https://webextension-api.thunderbird.net/en/mv3/)
+(as of TB 157 stable / ESR 140+, October 2026). Thunderbird runs Gecko, so
+wherever the API exists, it behaves like Firefox's — which this extension
+already targets (`pnpm build:firefox`).
+
+APIs are reached through `browser.*` (as on Firefox) or Thunderbird's
+preferable `messenger.*` alias; the WXT-generated code uses `browser.*`, which
+works in both.
+
+## Supported, no change needed
+
+| API | In TB | Where this extension uses it |
+| --- | --- | --- |
+| `storage.local` | 45 | settings (`lib/storage.ts`), remote rules (`lib/remote-rules.ts`) |
+| `storage.session` | 115 | per-tab translating-language key (`getTabTranslatingLang` in `entrypoints/background.ts`) |
+| `storage.onChanged` | 45 | popup refetch (`entrypoints/popup/main.tsx`) |
+| `alarms.create / onAlarm` | 45 | remote-rules daily fetch, cache eviction |
+| `action.setIcon` (per-tab), `onClicked`, `setPopup` | 105 | translating-state icon, toggle handler. `theme_icons` (also 105+) gives the theme-aware icon Chrome lacks |
+| `commands.getAll / update / onCommand` | 66 | hotkeys. `commands.update()` — which the code feature-detects and falls back without on Chrome — **is** supported in Thunderbird, so `applyHotkey` runs its real path and the options page's "can't apply on Chrome" copy is unnecessarily pessimistic there |
+| `scripting.executeScript` — `files`, `func` + `args`, `target.frameIds` / `allFrames`, `injectImmediately` | 102 | `injectContentScript` and the inline reload check in `background.ts`; `world: 'MAIN'` since 128 if ever needed |
+| `runtime.onInstalled / onStartup / openOptionsPage / getPlatformInfo / getManifest` | 45–52 | lifecycle hooks, options link |
+| `tabs.query / get / remove / onRemoved` | 62 | active-tab lookup (`sender.tab?.id` fallback), session-key cleanup |
+| `runtime.sendMessage → tabs.sendMessage(tabId, msg, { frameId })`, `sender.tab` / `sender.frameId` | 82 | the whole `@webext-core/messaging` RPC layer, including frame-targeted `startTranslation` |
+| `webNavigation.onCommitted / onDOMContentLoaded / onErrorOccurred` with `transitionType` | 45 | translation continuation across navigation, reload detection |
+| `host_permissions` (`<all_urls>`) | yes | background `fetch` to translation providers |
+
+## Different shape, adaptation needed
+
+| Concern | Browser assumption | Thunderbird reality |
+| --- | --- | --- |
+| What a "page" is | any URL, navigation events fire | Translation targets **message display pages** (message tabs in the main window, or a stand-alone message window). Mail display is not a navigation; `webNavigation` never fires for it. Triggers must move to `messageDisplay.onMessageDisplayed` / `messageDisplayScripts.register()` |
+| Injection permission | `host_permissions` alone | Needs the `messagesModify` permission (listed in `permissions`, not host permissions) and, for registered scripts, `messageDisplayScripts` |
+| Background lifecycle | Chrome MV3 service worker: no DOM, killed when idle | **Event page**: has a DOM (`runtime.getBackgroundPage()`), stays alive with Thunderbird. In-memory state (`bingSession`, `services` map, `commitInFlight`) survives; `idb` cache just works |
+| Toolbar surface | browser toolbar | Unified toolbar (`allowed_spaces` in the manifest's `action` block); also a `message_display_action` for stand-alone message windows |
+
+## Manifest deltas
+
+MV3 is supported since TB 128; target `strict_min_version: 140.0` (ESR) or
+higher. Relative to `wxt.config.ts`:
+
+- `browser_specific_settings.gecko.id` — the Firefox build already generates
+  `translaneur@jiafei.dev`; reuse it
+- add `messagesModify` to `permissions`
+- `action` gains `allowed_spaces` / `default_windows` so the button appears
+  where it is meaningful
+- `web_accessible_resources` for `/inject.js` keeps its browser form for
+  content tabs; message display scripts reference files through the
+  `messageDisplayScripts` API instead
+- `commands` carries over unchanged, including `suggested_key`
+
+## Not available (and what loses coverage because of it)
+
+| API | Effect |
+| --- | --- |
+| `tabs` has no `executeScript` (removed like Firefox's) | Irrelevant — the code already uses `scripting.executeScript` |
+| Mobile-only paths (`isMobile`, `setPopup({ popup: '' })`) | Harmlessly dead: TB reports `os: 'mac'/'win'/'linux'`, so both degrade to false |
+| `i18n`, `menus`, `notifications` | Not used by this extension |
