@@ -50,6 +50,7 @@ Copyright (C) 2026 rxliuli (original Imp Translate). Full license text in [LICEN
 - A user glossary pins the rendering of a term everywhere it appears, so proper nouns and product names stop drifting between blocks — see [docs/glossary.md](docs/glossary.md)
 - Smart DOM walker: only translates visible content, handles SPAs, lazy-loaded content, and dynamic text changes
 - Input hints too: a `placeholder` on inputs and textareas is translated in place (a form control has no room for a bilingual line) and restored when translation stops; `value`, `aria-label`, and `title` are left alone
+- The page's own styling is left intact: a container is only unclipped when the clip would actually hide the translation, and every inline style change is reverted when translation stops — so a button that hides a hover effect behind `overflow: hidden` keeps it — see [docs/clipped-translations.md](docs/clipped-translations.md)
 - Translations are cached per text and language, so a second pass over the same page costs nothing; "Re-translate" in the popup (↻ in the mobile bar) forces a fresh pass on demand — see [docs/cache.md](docs/cache.md)
 - Site-specific rules for skipping or targeting content areas
 - Configurable shortcuts from the options page: `Alt+T` toggles translation, `Alt+R` re-translates the page from scratch (ignoring the cache) — see [docs/hotkey.md](docs/hotkey.md)

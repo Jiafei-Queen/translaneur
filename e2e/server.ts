@@ -58,6 +58,43 @@ const pages: Record<string, string> = {
   </script>
 </body>
 </html>`,
+  // spring.io's `.button.is-spring` shape. The hero puts two buttons in one
+  // block, so the injection point stays on the container; the footer nests one
+  // in a <p>, so the injection point drills into the button whose clip the
+  // extension used to lift. The hover fill is a ::before parked at
+  // translateX(-101%), hidden only by the button's own overflow: hidden.
+  '/overflow-clip-button': `<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Overflow Clip Button</title>
+<style>
+  .button.is-spring {
+    background: transparent; border: 2px solid #111; border-radius: 0; color: #111;
+    display: inline-block; font-size: .9rem; font-weight: 700; height: auto;
+    line-height: 20px; overflow: hidden; padding: 15px 30px; position: relative;
+    text-transform: uppercase; transition: color .2s ease-in-out; z-index: 0;
+  }
+  .button.is-spring:before {
+    background-color: #191e1e; bottom: 0; content: ""; left: 0; position: absolute;
+    right: 0; top: 0; transform: translateX(-101%); transition: .2s ease-in-out; z-index: -1;
+  }
+  .button.is-spring:hover { color: #fff; text-decoration: none; }
+  .button.is-spring:hover:before { transform: translateX(0); }
+</style>
+</head>
+<body style="background:#fff">
+  <p id="intro">This paragraph is long enough to be translated as a block of its own.</p>
+  <div class="py-4 has-text-centered" id="hero">
+    <a href="/why" class="button is-spring mr-3" id="hero-1">Why Spring</a>
+    <a href="/quick" class="button is-spring" id="hero-2">Quickstart</a>
+  </div>
+  <div class="newsletter" id="newsletter-blog">
+    <h2 class="is-size-4">Get the Spring newsletter</h2>
+    <p class="py-0 pb-4 my-0">Stay connected with the Spring newsletter</p>
+    <p class="py-0 my-0"><a href="/sub" class="button is-spring" id="footer-sub">Subscribe</a></p>
+  </div>
+</body>
+</html>`,
   '/details': `<!DOCTYPE html>
 <html lang="en">
 <head><title>Details Toggle</title></head>

@@ -65,6 +65,23 @@ const RESULT_CLASS = 'imp-translate-result'
 const SPACER_CLASS = 'imp-translate-spacer'
 const PROCESSED_ATTR = 'data-imp-translated'
 const WRAP_ATTR = 'data-imp-wrap'
+// Prior inline values of page styles the extension overwrote, as a JSON map of
+// CSS property name → the value it had before. A property absent from the map
+// had no inline value, so restoring means removing the declaration and letting
+// the cascade show through. Lives in the DOM, like data-imp-attr-orig, so a stop
+// restores it even if the content script was reinjected in between. Exported so
+// render.ts writes the same list, and the two modules cannot drift.
+const STYLE_ORIG_ATTR = 'data-imp-style-orig'
+// `overflow` is a shorthand that sets both longhands. A page declaring only
+// `overflow-y: hidden` inline has that longhand as its original, and it is not
+// reachable by reading the shorthand back, so both are recorded separately.
+const OVERRIDDEN_PROPS = [
+  'overflow',
+  'overflow-x',
+  'overflow-y',
+  'max-height',
+  '-webkit-line-clamp',
+] as const
 const OVERSIZED_BLOCK_THRESHOLD = 8000
 
 function isInlineish(node: Node): boolean {
@@ -881,12 +898,40 @@ function restoreAttributeHint(el: Element) {
   el.removeAttribute('data-imp-attr-orig')
 }
 
+// Undo the inline style overrides render.ts wrote. A property that had no
+// inline value before is removed outright rather than reset to a value, so the
+// page's own stylesheet rule (e.g. `overflow: hidden`) shows through again.
+//
+// The record is a DOM attribute, so a page can overwrite it with anything. A
+// throw here would abort the rest of clearTranslations and leave the page
+// half-cleared, so an unreadable record is dropped: the element keeps its
+// inline style, the one case needing a reload, rather than wedging teardown.
+function restoreInlineStyles(el: Element) {
+  const raw = el.getAttribute(STYLE_ORIG_ATTR)
+  if (raw === null) return
+  el.removeAttribute(STYLE_ORIG_ATTR)
+  let prior: Record<string, string>
+  try {
+    prior = JSON.parse(raw) as Record<string, string>
+  } catch {
+    return
+  }
+  if (typeof prior !== 'object' || prior === null) return
+  const style = (el as HTMLElement).style
+  for (const prop of OVERRIDDEN_PROPS) {
+    const value = prior[prop]
+    if (typeof value === 'string') style.setProperty(prop, value)
+    else style.removeProperty(prop)
+  }
+}
+
 export function clearTranslations(root: Element = document.body) {
   function clearScope(scope: ParentNode) {
     restoreTextNodes(scope)
     scope.querySelectorAll(`.${RESULT_CLASS}`).forEach((el) => el.remove())
     scope.querySelectorAll('.imp-translate-br').forEach((el) => el.remove())
     scope.querySelectorAll(`.${SPACER_CLASS}`).forEach((el) => el.remove())
+    scope.querySelectorAll(`[${STYLE_ORIG_ATTR}]`).forEach(restoreInlineStyles)
     scope.querySelectorAll(`[${PROCESSED_ATTR}]`).forEach((el) => {
       restoreAttributeHint(el)
       el.removeAttribute(PROCESSED_ATTR)
@@ -908,9 +953,10 @@ export function clearTranslations(root: Element = document.body) {
 
   clearScope(root)
   restoreAttributeHint(root)
+  restoreInlineStyles(root)
   root.removeAttribute(PROCESSED_ATTR)
   root.removeAttribute('data-imp-text')
   root.removeAttribute('data-imp-noop')
 }
 
-export { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, getVisibleText }
+export { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, STYLE_ORIG_ATTR, OVERRIDDEN_PROPS, getVisibleText }

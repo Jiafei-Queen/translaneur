@@ -1,4 +1,4 @@
-import { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, buildBlockSource, buildAttributeSource, trimmedRuns, swapTextNodes, type TranslatableBlock } from './dom'
+import { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, STYLE_ORIG_ATTR, OVERRIDDEN_PROPS, buildBlockSource, buildAttributeSource, trimmedRuns, swapTextNodes, type TranslatableBlock } from './dom'
 import { buildMarkedSource, isPassthroughRun, splitTranslation, stripMarkers } from './align'
 import type { RenderMode } from './storage'
 import { LANGUAGES_SORTED } from './languages'
@@ -144,7 +144,24 @@ function hasLineClamp(el: HTMLElement): boolean {
   return !!(style.webkitLineClamp && style.webkitLineClamp !== 'none')
 }
 
+// Capture the inline values an override is about to destroy, so
+// clearTranslations can put them back (dom.ts restoreInlineStyles). The inline
+// read is usually '' — the page sets `overflow: hidden` in a stylesheet — and
+// recording that absence is what lets the restore remove the declaration and
+// expose the cascade. Guarded so re-injecting keeps the first original rather
+// than recording our own `visible`, matching runOriginals' rule for text.
+function rememberInlineStyle(el: HTMLElement): void {
+  if (el.hasAttribute(STYLE_ORIG_ATTR)) return
+  const prior: Record<string, string> = {}
+  for (const prop of OVERRIDDEN_PROPS) {
+    const value = el.style.getPropertyValue(prop)
+    if (value !== '') prior[prop] = value
+  }
+  el.setAttribute(STYLE_ORIG_ATTR, JSON.stringify(prior))
+}
+
 function applyLineClampOverride(el: HTMLElement) {
+  rememberInlineStyle(el)
   el.style.webkitLineClamp = 'unset'
   el.style.overflow = 'visible'
 }
@@ -152,6 +169,23 @@ function applyLineClampOverride(el: HTMLElement) {
 function hasOverflowClip(el: HTMLElement): boolean {
   const s = getComputedStyle(el)
   return s.overflow === 'hidden' || s.overflowY === 'hidden'
+}
+
+// Whether a clip is actually cutting content, as opposed to merely being
+// declared. `overflow: hidden` is also the standard way to hide a decorative
+// ::before parked outside the box — spring.io's `.button.is-spring` parks its
+// hover fill at translateX(-101%) — and lifting such a clip renders that fill
+// as a stray block. A clip only needs lifting when the box cannot grow to hold
+// the translation. See docs/clipped-translations.md.
+function clipActuallyConstrains(el: HTMLElement): boolean {
+  const s = getComputedStyle(el)
+  if (s.maxHeight !== 'none') return true
+  // Read the specified height, not getComputedStyle: the computed value is
+  // always a used pixel length, so it never says `auto` and cannot be
+  // compared. Inline only — a stylesheet `height: 3em` pins the box too, but
+  // the overflow check below catches it if it actually overflows.
+  if (el.style.height !== '' && el.style.height !== 'auto') return true
+  return el.scrollHeight > el.clientHeight
 }
 
 // If the last visible child of the target already creates a visual line break
@@ -239,16 +273,21 @@ export function injectLoading(blocks: TranslatableBlock[]) {
     const isShort = isShortBlock(text)
     const clampElement = hasLineClamp(element)
     const clampTarget = target !== element && hasLineClamp(target)
-    const clipElement = !clampElement && hasOverflowClip(element)
-    const clipTarget = target !== element && !clampTarget && hasOverflowClip(target)
+    const clipElement = !clampElement && hasOverflowClip(element) && clipActuallyConstrains(element)
+    const clipTarget =
+      target !== element && !clampTarget && hasOverflowClip(target) && clipActuallyConstrains(target)
     const needsBr = !isShort && !lastVisibleChildIsBlockLike(target, ref)
 
     const clippingAncestors: { el: HTMLElement; hasMaxHeight: boolean }[] = []
     if (clampElement || clampTarget || clipElement || clipTarget) {
       let anc = target.parentElement
       for (let i = 0; i < 3 && anc; i++) {
+        // Stop below <html>: clearTranslations scopes to document.body, so a
+        // write there outlives a stop. A tall document with `html { overflow:
+        // hidden }` satisfies the predicate and would lift the page scroller.
+        if (anc === anc.ownerDocument.documentElement) break
         const s = getComputedStyle(anc)
-        if (s.overflow === 'hidden' || s.overflowY === 'hidden') {
+        if ((s.overflow === 'hidden' || s.overflowY === 'hidden') && clipActuallyConstrains(anc)) {
           clippingAncestors.push({ el: anc, hasMaxHeight: s.maxHeight !== 'none' })
         }
         anc = anc.parentElement
@@ -266,9 +305,16 @@ export function injectLoading(blocks: TranslatableBlock[]) {
     if (root instanceof ShadowRoot) ensureShadowStyles(root)
     if (clampElement) applyLineClampOverride(element)
     if (clampTarget) applyLineClampOverride(target)
-    if (clipElement) element.style.overflow = 'visible'
-    if (clipTarget) target.style.overflow = 'visible'
+    if (clipElement) {
+      rememberInlineStyle(element)
+      element.style.overflow = 'visible'
+    }
+    if (clipTarget) {
+      rememberInlineStyle(target)
+      target.style.overflow = 'visible'
+    }
     for (const { el, hasMaxHeight } of clippingAncestors) {
+      rememberInlineStyle(el)
       el.style.overflow = 'visible'
       if (hasMaxHeight) el.style.maxHeight = 'none'
     }

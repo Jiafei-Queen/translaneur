@@ -653,6 +653,26 @@ describe('extractBlocks', () => {
     expect(root.innerHTML).toBe(before)
   })
 
+  it('clearTranslations survives a page-corrupted style record', () => {
+    // data-imp-style-orig lives in the DOM, so page script can overwrite it
+    // with anything. Throwing there would abort the rest of the teardown and
+    // leave the page half-cleared — a block still marked translated, with a
+    // stale data-imp-text the recheck pass would keep re-processing.
+    document.body.innerHTML =
+      '<div id="bad" data-imp-style-orig="not json"></div>' +
+      '<div id="after" data-imp-translated="true" data-imp-text="x">' +
+      '<font class="imp-translate-result">译文</font></div>'
+
+    expect(() => clearTranslations(document.body)).not.toThrow()
+
+    const after = document.getElementById('after')!
+    expect(after.hasAttribute(PROCESSED_ATTR)).toBe(false)
+    expect(after.hasAttribute('data-imp-text')).toBe(false)
+    expect(after.querySelectorAll('.imp-translate-result').length).toBe(0)
+    // The unreadable record is still dropped, so it cannot wedge later passes.
+    expect(document.getElementById('bad')!.hasAttribute('data-imp-style-orig')).toBe(false)
+  })
+
   it('should not wrap sibling inline elements that contain block-level content', () => {
     // Repro: npm.com readme structure — outer div has two span siblings,
     // first span contains the entire readme body inside <section>/<h1>/<p>...

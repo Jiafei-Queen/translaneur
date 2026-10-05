@@ -12,6 +12,42 @@ import { buildBlockSource, clearTranslations, extractBlocks, getTranslatableRuns
 import { buildMarkedSource, stripMarkers } from './align'
 
 describe('render', () => {
+  // Whether a translation is actually on screen. A clipped node keeps a
+  // non-zero box, so geometry alone cannot tell visible from cut off —
+  // hit-testing the bottom of the settled text can. The loading ring is
+  // excluded because it sits inside the source box and would pass either way.
+  const translationIsPainted = (container: HTMLElement): boolean => {
+    const result = container.querySelector('.imp-translate-result:not(.imp-translate-loading)')
+    if (!result) return false
+    const range = document.createRange()
+    range.selectNodeContents(result)
+    const box = range.getBoundingClientRect()
+    if (box.height === 0 || box.width === 0) return false
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.bottom - 1)
+    return hit === result || result.contains(hit)
+  }
+
+  // Reaches the settled state, which is the one a clip can hide.
+  const injectAndSettle = (block: TranslatableBlock) => {
+    injectLoading([block])
+    replaceWithTranslation([block], ['翻译文本'])
+  }
+
+  // A stylesheet a test appends is only removed by its own last statement, so
+  // a failing assertion leaves it live for every test after it — a rule on
+  // `html` would clip the page out from under unrelated geometry checks.
+  const addedStyles: HTMLStyleElement[] = []
+  afterEach(() => {
+    for (const el of addedStyles) el.remove()
+    addedStyles.length = 0
+  })
+  const addStyle = (css: string): void => {
+    const el = document.createElement('style')
+    el.textContent = css
+    document.head.appendChild(el)
+    addedStyles.push(el)
+  }
+
   it('should inject inside innermost inline element', () => {
     document.body.innerHTML = `
       <ul>
@@ -479,9 +515,11 @@ describe('render', () => {
     expect(elapsed).toBeLessThan(800)
   })
 
-  it('should override overflow:hidden on element without line-clamp', () => {
+  it('should override a constraining clip on element without line-clamp', () => {
+    // The max-height is what makes this clip worth lifting: a clip on a box
+    // that already fits its content only hides things the page parked there.
     document.body.innerHTML = `
-      <div id="msg" style="overflow: hidden;">
+      <div id="msg" style="overflow: hidden; max-height: 20px;">
         This is a long paragraph that exceeds the short text threshold limit.
       </div>
     `
@@ -492,6 +530,156 @@ describe('render', () => {
     injectLoading(blocks)
 
     expect(div.style.overflow).toBe('visible')
+  })
+
+  // spring.io's `.button.is-spring` shape: a hover fill in a ::before parked at
+  // translateX(-101%), hidden by the button's own clip. Lifting that clip
+  // rendered the fill as a stray block; the button grows to fit the
+  // translation, so its clip was never in the way.
+  it('keeps a clip that is not constraining content, so a parked ::before stays hidden', () => {
+    addStyle(`.spring-clip {
+      display: inline-block; overflow: hidden; padding: 15px 30px; position: relative;
+      white-space: nowrap; box-sizing: content-box; height: auto;
+    }
+    .spring-clip:before {
+      content: ''; position: absolute; left: 0; right: 0; top: 0; bottom: 0;
+      background: #191e1e; transform: translateX(-101%); z-index: -1;
+    }`)
+    document.body.innerHTML = `<p><a href="/sub" class="spring-clip" id="btn">Subscribe</a></p>`
+    const btn = document.getElementById('btn')! as HTMLElement
+    injectLoading([{ element: btn, text: 'Subscribe' }])
+
+    expect(btn.style.overflow).toBe('')
+    expect(btn.hasAttribute('data-imp-style-orig')).toBe(false)
+  })
+
+  it('lifts a fixed-height clip that would cut the translation off', () => {
+    // A box with a written height cannot grow when the translation is
+    // appended, so the clip must go or the translation is truncated. The
+    // narrow width is what makes the text wrap past that height.
+    document.body.innerHTML = `
+      <div id="fixed" style="overflow: hidden; height: 40px; width: 150px;">
+        A reasonably long sentence that will certainly exceed the available width of this clipped box.
+      </div>
+    `
+    const div = document.getElementById('fixed')! as HTMLElement
+    injectAndSettle({ element: div, text: div.textContent ?? '' })
+
+    expect(div.style.overflow).toBe('visible')
+    expect(translationIsPainted(div)).toBe(true)
+  })
+
+  it('lifts a fixed-height clip whose content still fits', () => {
+    // The case a bare "does the content already overflow" check misses: the
+    // box is height-pinned, so its content fits today, but the translation
+    // appended below lands outside the box and is clipped away entirely.
+    document.body.innerHTML = `
+      <div id="pinned" style="overflow: hidden; height: 40px; width: 400px;">
+        Short text here.
+      </div>
+    `
+    const div = document.getElementById('pinned')! as HTMLElement
+    injectAndSettle({ element: div, text: 'Short text here.' })
+
+    expect(div.style.overflow).toBe('visible')
+    expect(translationIsPainted(div)).toBe(true)
+  })
+
+  it('clearTranslations restores a clip that came from a stylesheet', () => {
+    addStyle('#sourced { overflow: hidden; height: 20px; }')
+    document.body.innerHTML = `
+      <div id="parent" style="overflow: hidden; max-height: 20px;">
+        <div id="sourced" style="width: 150px;">This is a long paragraph that exceeds the short text threshold limit.</div>
+      </div>
+    `
+    const div = document.getElementById('sourced')! as HTMLElement
+    const parent = document.getElementById('parent')! as HTMLElement
+    const blocks: TranslatableBlock[] = [
+      { element: div, text: 'This is a long paragraph that exceeds the short text threshold limit.' },
+    ]
+    injectLoading(blocks)
+    expect(getComputedStyle(div).overflow).toBe('visible')
+    expect(getComputedStyle(parent).maxHeight).toBe('none')
+
+    clearTranslations(document.body)
+
+    expect(div.style.overflow).toBe('')
+    expect(div.hasAttribute('data-imp-style-orig')).toBe(false)
+    expect(getComputedStyle(div).overflow).toBe('hidden')
+    // The parent's max-height was inline, so the restore puts the original
+    // declaration back rather than dropping it.
+    expect(parent.style.maxHeight).toBe('20px')
+    expect(parent.style.overflow).toBe('hidden')
+    expect(parent.hasAttribute('data-imp-style-orig')).toBe(false)
+  })
+
+  it('clearTranslations restores an inline overflow-y longhand', () => {
+    // `overflow` is written as a shorthand, so lifting it sets both
+    // longhands. A page that declared only `overflow-y: hidden` inline has
+    // that as its original, and reading the shorthand back would not find it.
+    document.body.innerHTML = `
+      <div id="longhand" style="overflow-y: hidden; max-height: 30px; width: 400px;">
+        <div style="width: 300px;">This is a long paragraph that exceeds the short text threshold limit.</div>
+      </div>
+    `
+    const div = document.getElementById('longhand')! as HTMLElement
+    injectLoading([{ element: div, text: div.textContent ?? '' }])
+    expect(getComputedStyle(div).overflowY).toBe('visible')
+
+    clearTranslations(document.body)
+
+    expect(div.style.overflowY).toBe('hidden')
+    expect(getComputedStyle(div).overflowY).toBe('hidden')
+    expect(div.hasAttribute('data-imp-style-orig')).toBe(false)
+  })
+
+  it('leaves a non-constraining clipping ancestor alone', () => {
+    // The ancestor clips, but it has room for what it holds — same shape as
+    // the spring.io button, one level up. The inner box is height-pinned, so
+    // the walk is entered and does lift it; the ancestor must be rejected by
+    // the same predicate rather than swept up with it.
+    document.body.innerHTML = `
+      <div id="ancestor" style="overflow: hidden; padding: 4px;">
+        <div id="inner" style="overflow: hidden; max-height: 20px;">
+          This is a long paragraph that exceeds the short text threshold limit.
+        </div>
+      </div>
+    `
+    const ancestor = document.getElementById('ancestor')! as HTMLElement
+    const inner = document.getElementById('inner')! as HTMLElement
+    injectLoading([{ element: inner, text: inner.textContent ?? '' }])
+
+    // The inner lift happened, so the loop really ran.
+    expect(inner.style.overflow).toBe('visible')
+    // Still the page's own inline `hidden` — a lift would read 'visible'.
+    expect(ancestor.style.overflow).toBe('hidden')
+    expect(ancestor.hasAttribute('data-imp-style-orig')).toBe(false)
+  })
+
+  it('never unclips <html>, whose lift would outlive a stop', () => {
+    // clearTranslations runs on document.body, so a write to <html> sits
+    // outside every cleanup scope: the document scroller would stay unclipped
+    // after the user turned translation off, until reload. <html> with
+    // overflow:hidden plus a tall document satisfies clipActuallyConstrains,
+    // so the ancestor walk would otherwise reach and lift it.
+    addStyle(
+      'html { overflow: hidden; } html, body { margin: 0; padding: 0; } ' +
+        '#tall { height: 4000px; } #host { overflow: hidden; max-height: 20px; }',
+    )
+    document.body.innerHTML = `
+      <div id="tall"></div>
+      <div id="host">This is a long paragraph that exceeds the short text threshold limit.</div>
+    `
+    const html = document.documentElement
+    const host = document.getElementById('host')! as HTMLElement
+    injectLoading([{ element: host, text: host.textContent ?? '' }])
+
+    expect(host.style.overflow).toBe('visible')
+    expect(html.style.overflow).toBe('')
+
+    clearTranslations(document.body)
+    expect(getComputedStyle(html).overflow).toBe('hidden')
+    expect(getComputedStyle(host).overflow).toBe('hidden')
   })
 
   it('should override clipping ancestor when child has line-clamp', () => {
@@ -512,6 +700,28 @@ describe('render', () => {
     expect(child.style.overflow).toBe('visible')
     expect(parent.style.overflow).toBe('visible')
     expect(parent.style.maxHeight).toBe('none')
+  })
+
+  it('clearTranslations restores an inline line-clamp', () => {
+    // A clamp is not gated on clipActuallyConstrains — it is content overflow
+    // by definition — but its override is written like any other, so it has
+    // to come back with the rest. A page clamped to 2 lines would otherwise
+    // stay unclamped after translation stopped.
+    document.body.innerHTML = `
+      <div id="clamped" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+        This is a long paragraph that exceeds the short text threshold limit
+        and wraps over more than two lines of text in a narrow column.
+      </div>
+    `
+    const div = document.getElementById('clamped')! as HTMLElement
+    injectLoading([{ element: div, text: div.textContent ?? '' }])
+    expect(div.style.webkitLineClamp).toBe('unset')
+
+    clearTranslations(document.body)
+
+    expect(div.style.webkitLineClamp).toBe('2')
+    expect(div.style.overflow).toBe('hidden')
+    expect(div.hasAttribute('data-imp-style-orig')).toBe(false)
   })
 
   it('should not inject duplicate loadings when same element appears twice in batch', () => {
