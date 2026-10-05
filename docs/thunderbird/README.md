@@ -24,6 +24,7 @@ alignment, glossary, term sentinel) keeps its value.
 | --- | --- |
 | [api-compat.md](api-compat.md) | Every WebExtension API this extension uses, checked against the Thunderbird MV3 docs (as of TB 157 / ESR 140+) |
 | [port.md](port.md) | Module-by-module port plan: what reuses as-is, what gets an adapter, what gets rewritten |
+| [plan.md](plan.md) | Sequenced task plan: six steps, each with effort and a gate; the spike comes first |
 | [spike.md](spike.md) | The go/no-go experiment: a minimal probe extension and the four unknowns it must answer |
 
 ## Why the port is cheap
