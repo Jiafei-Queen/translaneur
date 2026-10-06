@@ -39,6 +39,24 @@ const pages: Record<string, string> = {
   <p>Yet another page to verify navigation behavior.</p>
 </body>
 </html>`,
+  // Title translation: a button rewrites document.title the way SPA pages do
+  // on navigation, so the observer's re-translate path is exercised too. The
+  // initial title carries the same " — " separator our own composed titles
+  // use, guarding the decompose logic against splitting a page-owned title.
+  '/title': `<!DOCTYPE html>
+<html lang="en">
+<head><title>Test — Home</title></head>
+<body>
+  <h1>Title Page</h1>
+  <p>This page exists to exercise the tab-title pipeline.</p>
+  <button id="rename-title">Rename</button>
+  <script>
+    document.getElementById('rename-title').addEventListener('click', function() {
+      document.title = 'Renamed Title';
+    });
+  </script>
+</body>
+</html>`,
   '/dynamic-text': `<!DOCTYPE html>
 <html lang="en">
 <head><title>Dynamic Text</title></head>

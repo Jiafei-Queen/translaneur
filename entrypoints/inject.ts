@@ -30,6 +30,11 @@ import {
 import { saveSettings, type RenderMode } from '@/lib/storage'
 import { isUrlOnly, debugTime } from '@/lib/utils'
 import { describeExtraction } from '@/lib/diag'
+import {
+  shouldTranslateTitle,
+  composeTitle,
+  decomposeTitle,
+} from '@/lib/title'
 
 export default defineUnlistedScript(() => {
   const w = window as unknown as Record<string, unknown>
@@ -116,6 +121,128 @@ export default defineUnlistedScript(() => {
   let downTimer: ReturnType<typeof setTimeout> | null = null
   let upBatch: TranslatableBlock[] = []
   let upTimer: ReturnType<typeof setTimeout> | null = null
+
+  // --- Title translation (lib/title.ts) ----------------------------------
+  // The <title> lives in document.head, outside the body walker and its
+  // observer, so it carries its own pipeline: the page's part of the current
+  // title is tracked as originalTitle, translated through the same `translate`
+  // message, and written back. Composed output is identified by
+  // lastAppliedTitle, so the page's own updates and our own writes are told
+  // apart without racing the observer.
+  let titleActive = false
+  let titleObserver: MutationObserver | null = null
+  let originalTitle = ''
+  let lastAppliedTitle: string | null = null
+  // Whether the title on screen is our composition. Only then does part of
+  // the string belong to us and decomposeTitle apply — a page's own title is
+  // free to contain the separator, and blindly splitting those would
+  // translate a fragment ("GitHub — Where software…" → "Where software…").
+  let titleIsComposed = false
+  let titleTimer: ReturnType<typeof setTimeout> | null = null
+  // The request in flight when a newer one supersedes it (a page rewrote the
+  // title twice in a row). Only the newest request may write the title, and it
+  // may only do so if the page's part has not changed again meanwhile.
+  let titleRequestSeq = 0
+
+  function translateTitleNow(force: boolean) {
+    const t = debugTime('translateTitleNow')
+    // Every path that reaches this function sees the page's own title —
+    // a fresh start, or a page rewrite that passed the lastAppliedTitle
+    // check in onTitleMutation. The split below is the safety net for a
+    // composed title still on screen, e.g. our write landed after the page
+    // queued its own rewrite.
+    const pagePart = titleIsComposed
+      ? decomposeTitle(document.title, renderMode)
+      : null
+    const source = (pagePart ?? document.title).trim()
+    t(`source="${source.slice(0, 40)}"`)
+    if (!shouldTranslateTitle(source)) return
+    const seq = ++titleRequestSeq
+    messager
+      .sendMessage('translate', { text: source, targetLang, force })
+      .then((translated) => {
+        if (!isTranslating || seq !== titleRequestSeq) return
+        // A second page write may have landed while this request was in
+        // flight — recompute what the page owns rather than trusting the
+        // snapshot this request started from.
+        const currentPart = titleIsComposed
+          ? decomposeTitle(document.title, renderMode)
+          : null
+        if ((currentPart ?? document.title).trim() !== source) return
+        const composed = composeTitle(translated, source, renderMode)
+        lastAppliedTitle = composed
+        titleIsComposed = true
+        document.title = composed
+        discardTitleSelfMutation()
+        t('applied')
+      })
+      .catch((err) => {
+        console.error('[imp-translate] title translation error:', err)
+      })
+  }
+
+  function onTitleMutation() {
+    if (!isTranslating) return
+    const current = document.title
+    // Our own write echoes back through this observer; nothing to do.
+    if (current === lastAppliedTitle) return
+    lastAppliedTitle = null
+    titleIsComposed = false
+    // A genuine page rewrite: the whole title is the page's again. Track it,
+    // debounce, then re-translate — SPA pages rewrite the title on every
+    // route change, and each rewrite is one cache-backed request.
+    originalTitle = current
+    if (titleTimer) clearTimeout(titleTimer)
+    titleTimer = setTimeout(() => {
+      titleTimer = null
+      if (!isTranslating) return
+      translateTitleNow(false)
+    }, 100)
+  }
+
+  function discardTitleSelfMutation() {
+    titleObserver?.takeRecords()
+  }
+
+  function startTitleTranslation(force: boolean) {
+    // Titles are per-document and per-tab: sub-frames have none, and writing
+    // one from an iframe is ignored by the browser anyway.
+    if (window.self !== window.top) return
+    titleActive = true
+    originalTitle = document.title
+    lastAppliedTitle = null
+    titleIsComposed = false
+    titleObserver = new MutationObserver(onTitleMutation)
+    titleObserver.observe(document.head, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    })
+    translateTitleNow(force)
+  }
+
+  function stopTitleTranslation() {
+    // Never started here (setting off, or a sub-frame): nothing was captured,
+    // so restoring would write '' over the page's real title.
+    if (!titleActive) return
+    titleActive = false
+    if (titleTimer) {
+      clearTimeout(titleTimer)
+      titleTimer = null
+    }
+    titleRequestSeq++
+    if (titleObserver) {
+      titleObserver.disconnect()
+      titleObserver = null
+    }
+    // Restore what the page last showed, not the snapshot from start time —
+    // a page that renamed itself mid-translation must not time-travel. The
+    // assignment is a no-op whenever the title is already the page's own.
+    document.title = originalTitle
+    lastAppliedTitle = null
+    titleIsComposed = false
+    originalTitle = ''
+  }
 
   function discardSelfMutations() {
     observer?.takeRecords()
@@ -707,6 +834,7 @@ export default defineUnlistedScript(() => {
   }
 
   let debugMode = false
+  let translateTitleEnabled = false
 
   async function loadDeveloperSettings() {
     try {
@@ -714,6 +842,7 @@ export default defineUnlistedScript(() => {
       const settings = result.settings as Record<string, unknown> | undefined
       debugMode = settings?.debugMode === true
       renderMode = settings?.renderMode === 'translation-only' ? 'translation-only' : 'bilingual'
+      translateTitleEnabled = settings?.translateTitle === true
     } catch {}
   }
 
@@ -748,6 +877,10 @@ export default defineUnlistedScript(() => {
     await waitForDOMReady()
     t('waitForDOMReady done')
     if (!isTranslating) { t('stopped mid-init'); return }
+    if (translateTitleEnabled) {
+      startTitleTranslation(force)
+      t('startTitleTranslation called')
+    }
     if (showToast) { maybeShowToast(); t('maybeShowToast called') }
     visibilityObserver = new IntersectionObserver(onIntersection, {
       rootMargin: '0px 0px 100% 0px',
@@ -836,6 +969,7 @@ export default defineUnlistedScript(() => {
     document.removeEventListener('toggle', onToggle, { capture: true })
     document.removeEventListener('click', onClick, { capture: true })
     document.removeEventListener('scroll', onScroll, { capture: true })
+    stopTitleTranslation()
     clearTranslations(document.body)
     removeStyles()
     removeDebugStyles()

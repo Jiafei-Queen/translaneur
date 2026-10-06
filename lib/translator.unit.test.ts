@@ -70,6 +70,7 @@ const openaiSettings: Settings = {
   glossary: '',
   toggleHotkey: 'Alt+T',
   retranslateHotkey: 'Alt+R',
+  translateTitle: false,
   openai: {
     apiKey: 'test-key',
     baseUrl: 'https://api.example.com/v1',
@@ -352,6 +353,7 @@ const msSettings: Settings = {
   glossary: '',
   toggleHotkey: 'Alt+T',
   retranslateHotkey: 'Alt+R',
+  translateTitle: false,
   openai: {
     apiKey: '',
     baseUrl: '',
@@ -661,6 +663,7 @@ const impSettings: Settings = {
   glossary: '',
   toggleHotkey: 'Alt+T',
   retranslateHotkey: 'Alt+R',
+  translateTitle: false,
   openai: {
     apiKey: '',
     baseUrl: '',

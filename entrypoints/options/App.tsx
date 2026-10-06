@@ -444,6 +444,26 @@ export function App() {
                 options={DISPLAY_OPTIONS}
               />
             </div>
+
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="translate-title"
+                checked={settings.translateTitle}
+                onCheckedChange={(checked) =>
+                  update({ translateTitle: checked === true })
+                }
+              />
+              <div className="grid gap-0.5 leading-none">
+                <Label htmlFor="translate-title" className="cursor-pointer">
+                  Translate tab title
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Also translates the page title shown in the browser tab,
+                  following the display mode. Takes effect the next time a page
+                  starts translating.
+                </p>
+              </div>
+            </div>
           </section>
 
           <section className="space-y-4">
