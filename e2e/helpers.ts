@@ -181,6 +181,9 @@ export async function sendToContentScript(
   )
 }
 
+// Replaces the whole settings object with a deterministic mock baseline.
+// translateTitle is pinned off: billing assertions count body blocks only, and
+// the default-on title pipeline would add one request for the page title.
 export async function configureMockProvider(page: Page, baseURL: string) {
   const sw = await getServiceWorker(page.context())
   await sw.evaluate(async (endpoint) => {
@@ -188,6 +191,7 @@ export async function configureMockProvider(page: Page, baseURL: string) {
       settings: {
         provider: 'openai',
         targetLang: 'zh',
+        translateTitle: false,
         openai: {
           apiKey: 'test-key',
           endpoint,

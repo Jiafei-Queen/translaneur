@@ -27,7 +27,7 @@ import {
   showToastBar,
   hideToastBar,
 } from '@/lib/render'
-import { saveSettings, type RenderMode } from '@/lib/storage'
+import { getSettings, saveSettings, type RenderMode } from '@/lib/storage'
 import { isUrlOnly, debugTime } from '@/lib/utils'
 import { describeExtraction } from '@/lib/diag'
 import {
@@ -35,6 +35,14 @@ import {
   composeTitle,
   decomposeTitle,
 } from '@/lib/title'
+import {
+  isMailDisplayDocument,
+  extractSubject,
+  composeSubjectLine,
+  renderSubjectBlock,
+  clearSubjectBlock,
+  SUBJECT_SKIP_SELECTOR,
+} from '@/lib/mail-subject'
 
 export default defineUnlistedScript(() => {
   const w = window as unknown as Record<string, unknown>
@@ -87,14 +95,17 @@ export default defineUnlistedScript(() => {
   // Thunderbird's own header chrome (avatar / from / to tables) sits in the
   // display document's body (spike probe 1) and would otherwise translate as
   // page text — on the web, chrome is excluded, so the header is too.
-  const tbHeaderSkip = document.querySelector('table.moz-main-header')
+  const tbHeaderSkip = isMailDisplayDocument(document)
     ? ['table.moz-main-header']
     : undefined
 
   const extractOpts: ExtractOptions = {
     get skipSelectors() {
       const rules = getActiveSelectors().skipSelectors
-      return tbHeaderSkip ? [...rules, ...tbHeaderSkip] : rules
+      // Keep our own subject quote block out of the walk (lib/mail-subject.ts).
+      return tbHeaderSkip
+        ? [...rules, ...tbHeaderSkip, SUBJECT_SKIP_SELECTOR]
+        : [...rules, SUBJECT_SKIP_SELECTOR]
     },
     get includeSelectors() {
       return getActiveSelectors().includeSelectors
@@ -242,6 +253,39 @@ export default defineUnlistedScript(() => {
     lastAppliedTitle = null
     titleIsComposed = false
     originalTitle = ''
+  }
+
+  // --- Mail subject translation (lib/mail-subject.ts) ------------------
+  // Thunderbird's visible subject line sits in a privileged header document
+  // content scripts cannot reach, so the translation becomes a quote block at
+  // the top of the message body instead. The subject is static per message
+  // document (each message rewrites it), so this is read-once — no
+  // title-style mutation tracking.
+  let subjectActive = false
+  let subjectRequestSeq = 0
+
+  function startSubjectTranslation(force: boolean) {
+    if (window.self !== window.top) return
+    if (!isMailDisplayDocument(document)) return
+    const source = extractSubject(document)
+    if (!source) return
+    subjectActive = true
+    const seq = ++subjectRequestSeq
+    messager
+      .sendMessage('translate', { text: source, targetLang, force })
+      .then((translated) => {
+        if (!isTranslating || !subjectActive || seq !== subjectRequestSeq) return
+        renderSubjectBlock(document, composeSubjectLine(translated, targetLang))
+      })
+      .catch((err) => {
+        console.error('[imp-translate] subject translation error:', err)
+      })
+  }
+
+  function stopSubjectTranslation() {
+    subjectActive = false
+    subjectRequestSeq++
+    clearSubjectBlock(document)
   }
 
   function discardSelfMutations() {
@@ -838,11 +882,12 @@ export default defineUnlistedScript(() => {
 
   async function loadDeveloperSettings() {
     try {
-      const result = await browser.storage.local.get('settings')
-      const settings = result.settings as Record<string, unknown> | undefined
-      debugMode = settings?.debugMode === true
-      renderMode = settings?.renderMode === 'translation-only' ? 'translation-only' : 'bilingual'
-      translateTitleEnabled = settings?.translateTitle === true
+      // getSettings merges the defaults in, so a setting the user never
+      // touched follows the shipped default instead of reading as off.
+      const settings = await getSettings()
+      debugMode = settings.debugMode === true
+      renderMode = settings.renderMode === 'translation-only' ? 'translation-only' : 'bilingual'
+      translateTitleEnabled = settings.translateTitle === true
     } catch {}
   }
 
@@ -878,8 +923,18 @@ export default defineUnlistedScript(() => {
     t('waitForDOMReady done')
     if (!isTranslating) { t('stopped mid-init'); return }
     if (translateTitleEnabled) {
-      startTitleTranslation(force)
-      t('startTitleTranslation called')
+      // One pipeline per surface: a mail display document's "title" is the
+      // Subject header, translated as the quote block (lib/mail-subject.ts).
+      // Running the tab-title pipeline there too would translate the same
+      // text twice and rewrite the <title> the subject is read from. Web
+      // pages keep their tab-title translation via lib/title.ts.
+      if (isMailDisplayDocument(document)) {
+        startSubjectTranslation(force)
+        t('startSubjectTranslation called')
+      } else {
+        startTitleTranslation(force)
+        t('startTitleTranslation called')
+      }
     }
     if (showToast) { maybeShowToast(); t('maybeShowToast called') }
     visibilityObserver = new IntersectionObserver(onIntersection, {
@@ -970,6 +1025,7 @@ export default defineUnlistedScript(() => {
     document.removeEventListener('click', onClick, { capture: true })
     document.removeEventListener('scroll', onScroll, { capture: true })
     stopTitleTranslation()
+    stopSubjectTranslation()
     clearTranslations(document.body)
     removeStyles()
     removeDebugStyles()

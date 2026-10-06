@@ -41,6 +41,7 @@ test('does not touch the title when the setting is off', async ({
   await page.goto(`${baseURL}/title`)
   await page.waitForLoadState('domcontentloaded')
   await configureMockProvider(page, baseURL)
+  await setSettings(context, { translateTitle: false })
   await startTranslation(page)
 
   await expect(page.locator(TRANSLATED_SELECTOR).first()).toBeVisible({

@@ -50,7 +50,8 @@ Copyright (C) 2026 rxliuli (original Imp Translate). Full license text in [LICEN
 - A user glossary pins the rendering of a term everywhere it appears, so proper nouns and product names stop drifting between blocks — see [docs/glossary.md](docs/glossary.md)
 - Smart DOM walker: only translates visible content, handles SPAs, lazy-loaded content, and dynamic text changes
 - Input hints too: a `placeholder` on inputs and textareas is translated in place (a form control has no room for a bilingual line) and restored when translation stops; `value`, `aria-label`, and `title` are left alone
-- Optional tab-title translation: the title shown in the browser tab follows the page through SPA rewrites and is restored when translation stops; off by default, enabled in the options page
+- Title translation (on by default, toggle in the options page): the title shown in the browser tab follows the page through SPA rewrites and is restored when translation stops
+- On Thunderbird the same setting translates the mail subject: the app's own subject line is not reachable by extensions, so the translation is shown as a quote block at the top of the message body — see [docs/mail-subject.md](docs/mail-subject.md)
 - The page's own styling is left intact: a container is only unclipped when the clip would actually hide the translation, and every inline style change is reverted when translation stops — so a button that hides a hover effect behind `overflow: hidden` keeps it — see [docs/clipped-translations.md](docs/clipped-translations.md)
 - Translations are cached per text and language, so a second pass over the same page costs nothing; "Re-translate" in the popup (↻ in the mobile bar) forces a fresh pass on demand — see [docs/cache.md](docs/cache.md)
 - Site-specific rules for skipping or targeting content areas

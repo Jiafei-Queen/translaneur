@@ -52,9 +52,10 @@ export interface Settings {
   // OpenAI reads it as prompt instructions, Google as sentinels in the text;
   // Microsoft and Imp Credits cannot use it. See docs/glossary.md.
   glossary: string
-  // Translate the document title alongside the page body. Off by default:
-  // rewriting the tab label is more visible than any in-page change, so it
-  // stays an explicit choice. See lib/title.ts.
+  // Translate the title alongside the page body. On by default. It follows
+  // the surface: the browser tab title on the web (lib/title.ts), the mail
+  // subject quote block on Thunderbird (lib/mail-subject.ts). Takes effect the
+  // next time a page starts translating. See docs/mail-subject.md.
   translateTitle: boolean
 }
 
@@ -68,7 +69,7 @@ const DEFAULT_SETTINGS: Settings = {
   toggleHotkey: DEFAULT_TOGGLE_HOTKEY,
   retranslateHotkey: DEFAULT_RETRANSLATE_HOTKEY,
   glossary: '',
-  translateTitle: false,
+  translateTitle: true,
   openai: {
     apiKey: '',
     baseUrl: 'https://api.openai.com/v1',

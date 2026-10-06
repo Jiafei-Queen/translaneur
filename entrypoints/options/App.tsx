@@ -95,6 +95,22 @@ const DISPLAY_OPTIONS: readonly SegmentedOption<RenderMode>[] = [
   { value: 'translation-only', label: 'Translation only' },
 ]
 
+// The same setting covers the surface each target calls its "title": the tab
+// title in a browser, the mail subject on Thunderbird (docs/mail-subject.md).
+const TITLE_SETTING = (
+  import.meta.env.BROWSER === 'thunderbird'
+    ? {
+        label: 'Translate mail subject',
+        description:
+          'Also translates the subject, shown as a quote line above the message body. Takes effect the next time a message starts translating.',
+      }
+    : {
+        label: 'Translate tab title',
+        description:
+          'Also translates the page title shown in the browser tab, following the display mode. Takes effect the next time a page starts translating.',
+      }
+)
+
 /**
  * A settings field collapsed until asked for, with a one-line summary of what
  * it holds so the value is readable without opening it.
@@ -455,12 +471,10 @@ export function App() {
               />
               <div className="grid gap-0.5 leading-none">
                 <Label htmlFor="translate-title" className="cursor-pointer">
-                  Translate tab title
+                  {TITLE_SETTING.label}
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  Also translates the page title shown in the browser tab,
-                  following the display mode. Takes effect the next time a page
-                  starts translating.
+                  {TITLE_SETTING.description}
                 </p>
               </div>
             </div>

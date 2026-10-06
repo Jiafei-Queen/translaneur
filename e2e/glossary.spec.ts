@@ -92,7 +92,14 @@ test('glossary terms reach Google as sentinels inside the text', async ({
   const sw = await getServiceWorker(context)
   await sw.evaluate(async () => {
     await chrome.storage.local.set({
-      settings: { provider: 'google', targetLang: 'zh', glossary: 'Mercury = 汞' },
+      settings: {
+        provider: 'google',
+        targetLang: 'zh',
+        glossary: 'Mercury = 汞',
+        // Pinned off: the assertion below expects a sentinel in every sent
+        // payload, and the page title has no glossary term to mask.
+        translateTitle: false,
+      },
     })
   })
 
