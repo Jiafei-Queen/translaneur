@@ -6,6 +6,8 @@ All notable changes to Translaneur, from the fork point of
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-06
+
 ### Added
 
 - Right-click menu: translate the whole page, translate the selected text in an
