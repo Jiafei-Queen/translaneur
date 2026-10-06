@@ -184,6 +184,6 @@ Remaining spike-informed adjustments now fold into tiers 1–2: header chrome
 4. Rendering validation on real mail: HTML newsletter, plain-text mail,
    sanitized remote content, long threads
 5. Providers E2E in TB (Imp, Google, Bing, an OpenAI key)
-6. ATN packaging: `VENDOR.md` + source submission, messaging copy review
-   (`messagesRead` is a sensitive permission, though less so than the
-   `messagesModify` the spike proved unnecessary)
+6. Distribution: ship the unsigned XPI for "Install Add-on From File"
+   (Thunderbird enforces no signature — see [plan.md](plan.md) step 6); an
+   ATN listing with its vendoring and source submission is a later task

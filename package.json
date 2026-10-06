@@ -13,6 +13,7 @@
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
     "zip:thunderbird": "wxt zip -b thunderbird",
+    "xpi:thunderbird": "pnpm zip:thunderbird && for f in .output/*-thunderbird.zip; do cp \"$f\" \"${f%.zip}.xpi\"; done",
     "build:safari": "wxt zip -b safari",
     "compile": "tsc --noEmit",
     "postinstall": "wxt prepare",

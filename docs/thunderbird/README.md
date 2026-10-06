@@ -20,6 +20,13 @@ Overall: a medium-size port, roughly 1–2 weeks including testing, not a
 rewrite. Everything invested in the translation engine (bilingual rendering,
 alignment, glossary, term sentinel) keeps its value.
 
+## Status
+
+Steps 1–5 are done and verified live (TB 157). Step 6 is file distribution:
+Thunderbird enforces no add-on signatures, so the unsigned XPI installs from
+file and needs no ATN submission to ship (see [plan.md](plan.md)). An ATN
+listing — vendoring, source submission, permission review — is a later task.
+
 ## Documents
 
 | File | Contents |

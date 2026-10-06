@@ -7,7 +7,7 @@ detail behind steps 2–4 and [spike.md](spike.md) for the probe that step 1
 runs.
 
 ```
-Spike ──go──▶ Build target ──▶ Background skeleton ──▶ Render validation ──▶ Provider E2E ──▶ ATN
+Spike ──go──▶ Build target ──▶ Background skeleton ──▶ Render validation ──▶ Provider E2E ──▶ Distribution
  go/no-go      installs        translates a mail       renders correctly    really works      shippable
 ```
 
@@ -22,7 +22,7 @@ front versus every later step built on a wrong assumption.
 | 3 | Background trigger skeleton | 2–4 days | an HTML mail shows bilingually |
 | 4 | Render validation | 3–5 days | browser-equivalent behaviour on real mail |
 | 5 | Provider E2E (overlaps 4) | 1–2 days | all four providers + cache paths |
-| 6 | ATN packaging & review | 1–2 days | submitted with vendor sources |
+| 6 | Distribution (file distribution) | ≤ 1 day | unsigned XPI installs from file in release Thunderbird |
 
 ## Step 1 — Spike: the go/no-go experiment
 
@@ -97,6 +97,10 @@ assumes pages arrive by web navigation (~200–300 lines).
 Gate: the toolbar button / `Alt+T` translates and restores an opened mail. At
 this point the port's spine is through.
 
+**Gate passed** (TB 157): toolbar button and `Alt+T` translate and restore on
+message tabs, stand-alone windows, and the 3-pane preview pane; switching
+messages resets state as designed (the `onMessagesDisplayed` handler).
+
 ## Step 4 — Render validation
 
 Concentrated debugging on the surfaces step 1's spot-checks could not fully
@@ -113,22 +117,40 @@ cover, over real mail forms:
 Output: a behaviour checklist matching the browser build, with found issues
 triaged (fix `inject.js` / fix `render.ts` / accept).
 
+**Gate passed** (TB 157): every real-mail form above verified live by hand —
+plain-text (TB-1) and bare-`pre` HTML (TB-2) both fixed in `bugs.md`, and the
+user confirmed all mail renders correctly across surfaces and both render
+modes; the written checklist was skipped in favour of that live verification.
+
 ## Step 5 — Provider end-to-end (overlaps step 4)
 
 Real translation requests run from Thunderbird's background: Imp, Google,
 Bing, and an OpenAI key each verified, including cache hits and forced
 re-translate.
 
-## Step 6 — ATN packaging and review
+**Gate passed**: all four providers verified live from the Thunderbird
+background, cache hits and forced re-translate included.
 
-- `VENDOR.md` + source submission — every dependency (the eld dictionary,
-  `idb`, react, tailwind, …) goes through the vendoring flow
-- messages-copy review: browser-qualified strings such as the options page's
-  "Chrome can't apply shortcuts" need Thunderbird's actual behaviour
-  (`commands.update()` works there)
-- pre-review self-check of the `messagesRead` usage description — it is a
-  sensitive permission ATN reviews, though the spike proved the port can
-  avoid the higher-sensitivity `messagesModify`
+## Step 6 — Distribution (file distribution; ATN listing deferred)
+
+Thunderbird enforces no add-on signatures — every TB build ships
+`xpinstall.signatures.required=false` (Bug 1727113), and the developer docs
+state "Thunderbird does not sign add-ons". File distribution therefore needs
+no ATN submission: the unsigned XPI installs permanently via Add-ons and
+Themes → gear → "Install Add-on From File"; updates are manual.
+
+- package the Thunderbird build as an `.xpi` (`pnpm xpi:thunderbird`) and ship
+  it with the release
+- distribution note: install steps and an unsigned-build trust statement
+- gate: installs from file on a clean profile, survives restart, no signature
+  warning (TB 152+ suppresses the unsigned warning in official builds)
+
+An ATN listing is a later task, not this step — when it happens, revisit
+`VENDOR.md` + source-archive submission, the `messagesRead` usage
+description, the minimal-permission review, and listing metadata. Note for
+that day: the shared gecko id `translaneur@jiafei.dev` means a Firefox build
+listed on AMO would be offered to Thunderbird installs as an update unless a
+TB-specific `update_url` isolates them (updates stay manual until then).
 
 ## What starts first
 

@@ -29,7 +29,7 @@ Copyright (C) 2026 rxliuli (original Imp Translate). Full license text in [LICEN
 - Full-page translation with bilingual display by default — original text stays visible; an optional translation-only mode replaces text in place, keeping every original style, link, and animation
 - Zero overhead by default — no code is injected into any page until you ask for translation
 - Minimal — do one thing well, resist feature creep
-- Cross-platform — Chrome, Edge, Firefox, Safari, including mobile
+- Cross-platform — Chrome, Edge, Firefox, Safari, including mobile, plus Thunderbird
 
 ## Non-Goals
 
@@ -75,9 +75,10 @@ pnpm dev:firefox  # Firefox
 ## Build
 
 ```sh
-pnpm zip            # Chrome / Edge
-pnpm zip:firefox    # Firefox
-pnpm build:safari   # Safari (macOS + Xcode required)
+pnpm zip              # Chrome / Edge
+pnpm zip:firefox      # Firefox
+pnpm xpi:thunderbird  # Thunderbird (.xpi, installs from file)
+pnpm build:safari     # Safari (macOS + Xcode required)
 ```
 
 ## Test
