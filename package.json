@@ -14,10 +14,11 @@
     "zip:firefox": "wxt zip -b firefox",
     "zip:thunderbird": "wxt zip -b thunderbird",
     "xpi:thunderbird": "pnpm zip:thunderbird && for f in .output/*-thunderbird.zip; do cp \"$f\" \"${f%.zip}.xpi\"; done",
+    "sign:firefox": "pnpm build:firefox && web-ext sign --channel unlisted --source-dir .output/firefox-mv3 --artifacts-dir web-ext-artifacts",
     "build:safari": "wxt zip -b safari",
     "compile": "tsc --noEmit",
     "postinstall": "wxt prepare",
-    "test": "is-ci && pnpm exec playwright install || echo 'Not in CI' && vitest run",
+    "test": "is-ci && pnpm exec playwright install chromium || echo 'Not in CI' && vitest run",
     "e2e": "pnpm build && playwright test"
   },
   "dependencies": {
@@ -58,6 +59,7 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.5",
     "vitest-browser-react": "^2.2.0",
+    "web-ext": "^10.7.0",
     "wxt": "^0.20.25"
   },
   "packageManager": "pnpm@10.5.2+sha512.da9dc28cd3ff40d0592188235ab25d3202add8a207afbedc682220e4a0029ffbff4562102b9e6e46b4e3f9e8bd53e6d05de48544b0c57d4b0179e22c76d1199b",

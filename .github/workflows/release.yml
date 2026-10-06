@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check tag matches package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            exit 1
+          fi
+      - run: pnpm zip
+      - run: pnpm xpi:thunderbird
+      - name: Build and sign Firefox xpi
+        run: pnpm sign:firefox
+        timeout-minutes: 20
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_API_KEY }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_API_SECRET }}
+      - name: Collect release assets
+        run: mv web-ext-artifacts/*.xpi "translaneur-${GITHUB_REF_NAME#v}-firefox.xpi"
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            .output/translaneur-*-chrome.zip
+            translaneur-*-firefox.xpi
+            .output/translaneur-*-thunderbird.xpi
+          generate_release_notes: true
