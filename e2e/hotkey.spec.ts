@@ -22,6 +22,8 @@ test('manifest declares both commands with their default bindings', async ({
   context,
 }) => {
   const commands = await getCommands(context)
+  // Known issue: macOS reports shortcuts in symbol form ('⌥T'), so this
+  // assertion matches on Linux CI only.
   expect(commands).toEqual(
     expect.arrayContaining([
       { name: TOGGLE, shortcut: 'Alt+T' },
