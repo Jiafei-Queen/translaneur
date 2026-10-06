@@ -71,6 +71,7 @@ const openaiSettings: Settings = {
   toggleHotkey: 'Alt+T',
   retranslateHotkey: 'Alt+R',
   translateTitle: false,
+  selectionBubbleFollow: true,
   openai: {
     apiKey: 'test-key',
     baseUrl: 'https://api.example.com/v1',
@@ -354,6 +355,7 @@ const msSettings: Settings = {
   toggleHotkey: 'Alt+T',
   retranslateHotkey: 'Alt+R',
   translateTitle: false,
+  selectionBubbleFollow: true,
   openai: {
     apiKey: '',
     baseUrl: '',
@@ -664,6 +666,7 @@ const impSettings: Settings = {
   toggleHotkey: 'Alt+T',
   retranslateHotkey: 'Alt+R',
   translateTitle: false,
+  selectionBubbleFollow: true,
   openai: {
     apiKey: '',
     baseUrl: '',

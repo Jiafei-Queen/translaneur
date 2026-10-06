@@ -1,4 +1,5 @@
 import { shouldTranslateTitle } from './title'
+import { PROCESSED_ATTR, RESULT_CLASS } from './dom'
 
 // Thunderbird renders the visible subject line in its own privileged header
 // document (about:message's #expandedsubjectBox), which content scripts cannot
@@ -53,11 +54,6 @@ export function subjectLabel(targetLang: string): string {
   return SUBJECT_LABELS[targetLang] ?? SUBJECT_LABELS[base] ?? FALLBACK_SUBJECT_LABEL
 }
 
-/** The quote block's single line: a language-matched label plus the translation. */
-export function composeSubjectLine(translated: string, targetLang: string): string {
-  return `${subjectLabel(targetLang)}${translated}`
-}
-
 /**
  * The mail subject as the translation source — the display document's
  * <title>, which the MIME HTML emitter writes as the decoded Subject header.
@@ -109,14 +105,30 @@ function removeSubjectNodes(doc: Document) {
  * before the body container, never inside it, so a plain-text mail's <pre>
  * keeps its structure. Attachment wrappers carry the same container classes,
  * so they are skipped when picking the anchor.
+ *
+ * The block carries the standard translatable-block identity (mark plus source
+ * payload) and the translation sits in the standard wrapper, so page-wide edit
+ * mode can edit and save it just like body text — the walker itself never
+ * touches it (SUBJECT_SKIP_SELECTOR), and the label stays outside the wrapper
+ * so a saved override contains only the subject.
  */
-export function renderSubjectBlock(doc: Document, line: string): void {
+export function renderSubjectBlock(
+  doc: Document,
+  source: string,
+  translated: string,
+  targetLang: string,
+): void {
   ensureSubjectStyles(doc)
   removeSubjectNodes(doc)
   const block = doc.createElement('blockquote')
   block.className = SUBJECT_CLASS
   block.setAttribute(SUBJECT_BLOCK_ATTR, '')
-  block.textContent = line
+  block.setAttribute(PROCESSED_ATTR, 'true')
+  block.setAttribute('data-imp-text', source)
+  const wrapper = doc.createElement('font')
+  wrapper.className = RESULT_CLASS
+  wrapper.textContent = translated
+  block.append(subjectLabel(targetLang), wrapper)
   const anchor = Array.from(
     doc.querySelectorAll('div.moz-text-plain, div.moz-text-flowed, div.moz-text-html'),
   ).find((el) => !el.closest('fieldset'))

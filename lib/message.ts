@@ -7,6 +7,11 @@ export interface TranslateRequest {
   // Force re-translation: skip the cache read for this text. See
   // docs/cache.md — "Re-translate".
   force?: boolean
+  // Site/sender-domain key, resolved once per document by the content script
+  // (via getSiteKey) and sent with each request so the background can apply a
+  // user's translation override for this block. Absent for callers with no
+  // document (extension pages, the Imp page RPC).
+  site?: string
 }
 
 export interface TranslateBatchRequest {
@@ -14,24 +19,38 @@ export interface TranslateBatchRequest {
   targetLang: string
 }
 
-// A remote command (hotkey / popup) as carried over storage. Thunderbird's
-// displayed messages cannot be messaged reliably from the background
-// (docs/thunderbird/bugs.md TB-3), but their scripts do see storage.onChanged
-// — for storage.local only, since storage.session is not exposed to content
-// scripts. Commands therefore ride a per-tab `tab_wakeup_${tabId}` key in
-// storage.local next to the direct message. This is a command, not state: the
-// truth stays `tab_translating_${tabId}` in storage.session, and a stale
-// wake-up is inert because nothing ever re-reads it.
-export interface TabWakeup {
-  lang: string | null
-  force?: boolean
-  showToast?: boolean
-  // Command revision, shared with the startTranslation message so the two
-  // deliveries of one command apply once — a forced start re-walks the page,
-  // so a double apply walks (and bills) it twice. A command without a
-  // revision always applies.
-  rev?: number
-}
+// A remote command (hotkey / popup / context menu) as carried over storage.
+// Thunderbird's displayed messages cannot be messaged reliably from the
+// background (docs/thunderbird/bugs.md TB-3), but their scripts do see
+// storage.onChanged — for storage.local only, since storage.session is not
+// exposed to content scripts. Commands therefore ride a per-tab
+// `tab_wakeup_${tabId}` key in storage.local next to the direct message. This
+// is a command, not state: the truth stays `tab_translating_${tabId}` in
+// storage.session, and a stale wake-up is inert because nothing ever re-reads
+// it.
+//
+// The union is discriminated by `kind` (absent = 'page', so every pre-existing
+// `{ lang }` command stays valid). The context menu added two more commands
+// that share the channel: showing a selection's translation in-page, and
+// opening the inline editor for a translated block.
+export type WakeupCommand =
+  | {
+      kind?: 'page'
+      lang: string | null
+      force?: boolean
+      showToast?: boolean
+    }
+  | { kind: 'selection'; source: string; translated: string }
+  | { kind: 'edit' }
+
+export type TabWakeup = WakeupCommand & { rev?: number }
+
+// Background → content-script delivery of a context-menu command over the
+// direct message channel (the wake-up is the mail-safe fallback). Carries the
+// same revision so the two deliveries apply once.
+export type MenuPayload = Extract<WakeupCommand, { kind: 'selection' | 'edit' }>
+
+export type MenuCommand = MenuPayload & { rev: number }
 
 export const TAB_WAKEUP_PREFIX = 'tab_wakeup_'
 
@@ -67,6 +86,11 @@ export const messager = defineExtensionMessaging<{
   stopTab(data: { tabId: number }): void
   getTabState(data: { tabId: number }): string | null
   getSelfTabState(): string | null
+  // Content script => background: the per-document key user overrides are
+  // stored under (registrable web domain, or the mail sender's domain). The
+  // content script resolves it once and stamps it onto every translate
+  // request, so the background never has to guess the message inside a tab.
+  getSiteKey(): string | null
   // The calling content script's tab id — lets a displayed message match
   // itself against its per-tab storage wake-up (TabWakeup).
   getSelfTabId(): number | null
@@ -110,4 +134,16 @@ export const messager = defineExtensionMessaging<{
   }): void
   stopTranslation(): void
   getState(): boolean
+  // Background → content script: a context-menu command that has no page-
+  // translation semantics (selection result overlay, open editor). Mirrors the
+  // startTranslation delivery shape; the storage wake-up is the mail-safe
+  // fallback.
+  menuCommand(data: MenuCommand): void
+  // Content script → background: persist the user's edits from page-wide edit
+  // mode. The background resolves the site/sender domain from the sender tab
+  // and writes the per-domain overrides (lib/overrides.ts) in one batch.
+  saveTranslationOverrides(data: {
+    targetLang: string
+    entries: Array<{ source: string; translated: string }>
+  }): void
 }>()

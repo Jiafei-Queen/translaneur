@@ -1,5 +1,20 @@
 import { checkConnection, exchangeCode, humanizeError } from '@rxliuli/imp-credits-sdk'
-import { messager, type TabWakeup, TAB_WAKEUP_PREFIX } from '@/lib/message'
+import {
+  messager,
+  type WakeupCommand,
+  type MenuPayload,
+  TAB_WAKEUP_PREFIX,
+} from '@/lib/message'
+import {
+  menusApi,
+  MENU_TRANSLATE_PAGE,
+  MENU_TRANSLATE_SELECTION,
+  MENU_EDIT_TRANSLATION,
+  type MenuClickInfo,
+  type MenuTargetTab,
+} from '@/lib/menus'
+import { getOverride, setOverrides } from '@/lib/overrides'
+import { parse } from 'tldts'
 import { getSettings, saveSettings, peekSettings, type TranslationProvider } from '@/lib/storage'
 import { translate } from '@/lib/translator'
 import { getCached, setCached, evictOldEntries } from '@/lib/cache'
@@ -60,6 +75,12 @@ interface MailMessageDisplay {
   }
 }
 
+// messageDisplay.getDisplayedMessages(tabId) returns a MessageList; only the
+// author is read (to key a user's translation edits by sender domain).
+interface MailMessageDisplayRead {
+  getDisplayedMessages(tabId: number): Promise<{ messages?: Array<{ author?: string }> }>
+}
+
 function messageDisplayScripts(): MailScripting['messageDisplay'] | undefined {
   const ns = (browser.scripting as unknown as Partial<MailScripting>)?.messageDisplay
   return typeof ns?.registerScripts === 'function' ? ns : undefined
@@ -68,6 +89,46 @@ function messageDisplayScripts(): MailScripting['messageDisplay'] | undefined {
 function messageDisplay(): MailMessageDisplay | undefined {
   const ns = (browser as unknown as { messageDisplay?: MailMessageDisplay }).messageDisplay
   return typeof ns?.onMessagesDisplayed?.addListener === 'function' ? ns : undefined
+}
+
+function messageDisplayRead(): MailMessageDisplayRead | undefined {
+  const ns = (browser as unknown as { messageDisplay?: Partial<MailMessageDisplayRead> })
+    .messageDisplay
+  return typeof ns?.getDisplayedMessages === 'function'
+    ? (ns as MailMessageDisplayRead)
+    : undefined
+}
+
+// The sender's domain, from a header author string ("Name <user@host>" or a
+// bare address). Null when there is no address to key on.
+function authorDomain(author: string | undefined): string | null {
+  if (!author) return null
+  const bracketed = author.match(/<([^>]+)>/)
+  const address = (bracketed ? bracketed[1] : author).trim()
+  const at = address.lastIndexOf('@')
+  if (at === -1 || at === address.length - 1) return null
+  return address.slice(at + 1).toLowerCase() || null
+}
+
+// The key a user's translation edits are stored under: the registrable domain
+// on the web, the sender's domain in Thunderbird (a mail document has no
+// meaningful hostname). Used for both lookup and save, always resolved from the
+// sender tab so the content script never has to know the platform.
+async function resolveSiteKeyForTab(tabId: number): Promise<string | null> {
+  try {
+    const tab = await browser.tabs.get(tabId)
+    if (isMailSurfaceTab(tab as unknown as { type?: string })) {
+      const read = messageDisplayRead()
+      if (!read) return null
+      const list = await read.getDisplayedMessages(tabId)
+      return authorDomain(list?.messages?.[0]?.author)
+    }
+    const host = hostnameFromUrl(tab.url)
+    if (!host) return null
+    return parse(host).domain ?? host
+  } catch {
+    return null
+  }
 }
 
 // tab.type is Gecko-only (and untyped in the shared surface). The 3-pane
@@ -138,7 +199,7 @@ const wakeupsReady = (async () => {
 
 async function ringTabWakeup(
   tabId: number,
-  wakeup: Omit<TabWakeup, 'rev'>,
+  wakeup: WakeupCommand,
 ): Promise<number> {
   await wakeupsReady
   const rev = ++commandRev
@@ -455,10 +516,102 @@ export default defineBackground(() => {
     return service
   }
 
+  // --- Context menu -------------------------------------------------------
+  // A context-menu command that has no page-translation meaning (selection
+  // overlay, open editor). Delivered over the direct channel for web tabs and
+  // the storage wake-up for mail surfaces, both stamped with one revision so a
+  // double delivery applies once (see TabWakeup).
+  async function deliverMenuCommand(tabId: number, cmd: MenuPayload) {
+    const tab = await browser.tabs.get(tabId)
+    if (isMailSurfaceTab(tab as unknown as { type?: string })) {
+      void injectContentScript(tabId).catch(() => {})
+    } else {
+      await injectContentScript(tabId).catch(() => {})
+    }
+    const rev = await ringTabWakeup(tabId, cmd)
+    try {
+      await messager.sendMessage('menuCommand', { ...cmd, rev }, { tabId })
+    } catch {
+      // Mail surfaces may not accept background → content messages; the
+      // wake-up above is the delivery that survives.
+    }
+  }
+
+  async function translateSelectionForTab(tabId: number, source: string) {
+    const settings = await getSettings()
+    let translated: string
+    try {
+      // No force: text already translated on the page is a cache hit.
+      translated = await getService(settings.provider).translate(
+        source,
+        settings.targetLang,
+        { scope: `${tabId}:selection` },
+      )
+    } catch (err) {
+      console.error('[imp-translate] selection translation failed:', err)
+      return
+    }
+    await deliverMenuCommand(tabId, { kind: 'selection', source, translated })
+  }
+
+  async function onMenuClick(info: MenuClickInfo, eventTab?: MenuTargetTab) {
+    const tab =
+      eventTab?.id !== undefined
+        ? eventTab
+        : (await browser.tabs.query({ active: true, currentWindow: true }))[0]
+    const tabId = tab?.id
+    if (tabId === undefined) return
+    if (info.menuItemId === MENU_TRANSLATE_PAGE) {
+      if (isPdfUrl(tab.url)) return
+      if (await isTabActivelyTranslating(tab as { id?: number; type?: string })) {
+        await stopTranslationForTab(tabId)
+      } else {
+        const settings = await getSettings()
+        await startTranslationForTab(tabId, settings.targetLang, true)
+      }
+      return
+    }
+    if (info.menuItemId === MENU_TRANSLATE_SELECTION) {
+      const text = info.selectionText?.trim()
+      if (text) await translateSelectionForTab(tabId, text)
+      return
+    }
+    if (info.menuItemId === MENU_EDIT_TRANSLATION) {
+      await deliverMenuCommand(tabId, { kind: 'edit' })
+    }
+  }
+
+  // Created at top level so the event page re-registers them on every wake-up
+  // (Firefox/MV3 keeps menu items across restarts; duplicate ids throw and are
+  // swallowed).
+  const menuApi = menusApi()
+  if (menuApi) {
+    const create = (id: string, title: string, contexts: string[]) => {
+      try {
+        menuApi.create({ id, title, contexts })
+      } catch {}
+    }
+    create(MENU_TRANSLATE_PAGE, 'Translate page', ['page'])
+    create(MENU_TRANSLATE_SELECTION, 'Translate selection', ['selection'])
+    create(MENU_EDIT_TRANSLATION, 'Edit translations', ['page'])
+    menuApi.onClicked.addListener((info, tab) => {
+      void onMenuClick(info, tab)
+    })
+  }
+
   messager.onMessage('translate', async ({ data, sender }) => {
     const t = debugTime(`bg:translate(lang=${data.targetLang}, text="${data.text.slice(0, 40)}")`)
     const settings = await getSettings()
     t('getSettings done')
+    // A hand-edited translation wins over cache and provider alike, so it
+    // survives re-translate and the scroll recheck that re-requests this block.
+    if (data.site) {
+      const override = await getOverride(data.site, data.targetLang, data.text)
+      if (override !== undefined) {
+        t('override hit')
+        return override
+      }
+    }
     // A frame is a document: the page is the main frame, every iframe its own.
     // Scoping the queue that way keeps the "consecutive segments of one
     // document" instruction in lib/translator.ts true — otherwise two tabs, or
@@ -608,6 +761,23 @@ export default defineBackground(() => {
 
   messager.onMessage('detectLanguageBatch', ({ data }) => {
     return data.texts.map((text) => eldDetectLanguage(text))
+  })
+
+  messager.onMessage('getSiteKey', async ({ sender }) => {
+    const tabId = sender.tab?.id
+    if (tabId === undefined) return null
+    return await resolveSiteKeyForTab(tabId)
+  })
+
+  // Persist the edits from a page-wide edit-mode session under the sender's
+  // site/sender-domain. The content script owns the DOM; this only records the
+  // overrides so future passes reuse them.
+  messager.onMessage('saveTranslationOverrides', async ({ data, sender }) => {
+    const tabId = sender.tab?.id
+    if (tabId === undefined) return
+    const site = await resolveSiteKeyForTab(tabId)
+    if (!site) return
+    await setOverrides(site, data.targetLang, data.entries)
   })
 
   messager.onMessage('refreshRemoteRules', async () => {

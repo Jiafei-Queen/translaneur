@@ -33,8 +33,8 @@ Copyright (C) 2026 rxliuli (original Imp Translate). Full license text in [LICEN
 
 ## Non-Goals
 
-- Auto-injected UI (floating buttons, popups on hover, etc.)
-- Word or sentence-level translation (selection, lookup, dictionaries)
+- Auto-injected UI that appears without a user action (floating buttons, hover popups, in-page toolbars) — the right-click overlays below are opt-in per use
+- Dictionary / word-lookup features (the selection translation is a plain translation, not definitions)
 - Input box translation (Discord, Slack, etc.)
 - Video subtitle translation (YouTube, Netflix, etc.)
 - Custom translation styling — will never be considered
@@ -56,6 +56,7 @@ Copyright (C) 2026 rxliuli (original Imp Translate). Full license text in [LICEN
 - Translations are cached per text and language, so a second pass over the same page costs nothing; "Re-translate" in the popup (↻ in the mobile bar) forces a fresh pass on demand — see [docs/cache.md](docs/cache.md)
 - Site-specific rules for skipping or targeting content areas
 - Configurable shortcuts from the options page: `Alt+T` toggles translation, `Alt+R` re-translates the page from scratch (ignoring the cache) — see [docs/hotkey.md](docs/hotkey.md)
+- Right-click actions, on web pages and Thunderbird messages: translate the whole page, translate the selected text (shown in a draggable in-page bubble), and edit every translation inline with a single save bar — see [docs/menus.md](docs/menus.md)
 - Shadow DOM isolation for injected UI
 
 ## Install

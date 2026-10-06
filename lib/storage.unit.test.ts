@@ -90,6 +90,19 @@ describe('storage', () => {
     expect((await getSettings()).translateTitle).toBe(false)
   })
 
+  it('bubble follow defaults to on and an explicit off round-trips', async () => {
+    const { getSettings, saveSettings } = await import('./storage')
+    expect((await getSettings()).selectionBubbleFollow).toBe(true)
+
+    // A profile stored before the setting existed has no such key and must
+    // still read back as the new default, not undefined.
+    localStore.set('settings', { provider: 'google' })
+    expect((await getSettings()).selectionBubbleFollow).toBe(true)
+
+    await saveSettings({ selectionBubbleFollow: false })
+    expect((await getSettings()).selectionBubbleFollow).toBe(false)
+  })
+
   it('migrates a stored hotkey into toggleHotkey', async () => {
     // Pre-0.2.2 profiles have one shortcut under `hotkey`. It is the user's own
     // binding, so the upgrade must carry it across rather than drop it back to

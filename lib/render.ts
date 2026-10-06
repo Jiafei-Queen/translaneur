@@ -1,4 +1,4 @@
-import { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, STYLE_ORIG_ATTR, OVERRIDDEN_PROPS, buildBlockSource, buildAttributeSource, trimmedRuns, swapTextNodes, type TranslatableBlock } from './dom'
+import { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, EDIT_ATTR, STYLE_ORIG_ATTR, OVERRIDDEN_PROPS, buildBlockSource, buildAttributeSource, trimmedRuns, swapTextNodes, type TranslatableBlock } from './dom'
 import { buildMarkedSource, isPassthroughRun, splitTranslation, stripMarkers } from './align'
 import type { RenderMode } from './storage'
 import { LANGUAGES_SORTED } from './languages'
@@ -103,6 +103,15 @@ const STYLES_TEXT = `
   `
 
 let sharedSheet: CSSStyleSheet | null = null
+
+// Set while page-wide edit mode is on (lib/edit-mode.ts): every wrapper that
+// receives a translation is handed to the decorator so it becomes editable,
+// including wrappers created lazily after edit mode started.
+let resultDecorator: ((wrapper: HTMLElement) => void) | null = null
+
+export function setResultDecorator(fn: ((wrapper: HTMLElement) => void) | null) {
+  resultDecorator = fn
+}
 
 function getSharedSheet(): CSSStyleSheet | null {
   if (typeof CSSStyleSheet === 'undefined') return null
@@ -481,6 +490,9 @@ export function replaceWithTranslation(
     const translated = translations[i]
     const wrapper = element.querySelector(`.${RESULT_CLASS}`)
     if (!wrapper) continue
+    // A wrapper under edit mode owns its text: a live re-translation must not
+    // overwrite what the user is typing.
+    if (wrapper.hasAttribute(EDIT_ATTR)) continue
 
     // The run texts come from the DOM, not by re-parsing the markers: bilingual
     // never writes into the runs, so they still hold what the request was built
@@ -504,6 +516,7 @@ export function replaceWithTranslation(
 
     wrapper.className = RESULT_CLASS
     wrapper.textContent = plain
+    resultDecorator?.(wrapper as HTMLElement)
   }
 }
 
@@ -585,6 +598,9 @@ export function replaceWithError(
 
     const wrapper = element.querySelector(`.${RESULT_CLASS}`) as HTMLElement | null
     if (!wrapper) continue
+    // Under edit mode the user's text is authoritative; an error must not
+    // replace it.
+    if (wrapper.hasAttribute(EDIT_ATTR)) continue
     wrapper.className = `${RESULT_CLASS} ${ERROR_CLASS}`
     wrapper.textContent = ''
     appendRetryButton(wrapper, onRetry)

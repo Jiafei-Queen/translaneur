@@ -28,6 +28,7 @@ works in both.
 | `runtime.sendMessage → tabs.sendMessage(tabId, msg, { frameId })`, `sender.tab` / `sender.frameId` | 82 | the whole `@webext-core/messaging` RPC layer, including frame-targeted `startTranslation`. Caveat (TB-3): content → background (`runtime.sendMessage`, `sender.tab`) is spike-verified; **background → displayed-message** (`tabs.sendMessage`) is not — mail commands are duplicated over `storage.local` wake-ups so a missing delivery is harmless |
 | `webNavigation.onCommitted / onDOMContentLoaded / onErrorOccurred` with `transitionType` | 45 | translation continuation across navigation, reload detection — **browser builds only**: the Thunderbird manifest drops `webNavigation` (mail display is not a navigation), and `background.ts` feature-detects the namespace before listening |
 | `host_permissions` (`<all_urls>`) | yes | background `fetch` to translation providers |
+| `menus` (Thunderbird has **no** `contextMenus` alias) | 45 | context-menu items (`page`, `selection`) and `onClicked` including `selectionText`; documented to work in message display tabs. Requires the `menus` permission; `lib/menus.ts` normalises it against Chromium's `contextMenus`. See [menus.md](../menus.md) |
 
 ## Different shape, adaptation needed
 
@@ -68,4 +69,4 @@ higher. Relative to `wxt.config.ts`:
 | --- | --- |
 | `tabs` has no `executeScript` (removed like Firefox's) | Irrelevant — the code already uses `scripting.executeScript` |
 | Mobile-only paths (`isMobile`, `setPopup({ popup: '' })`) | Harmlessly dead: TB reports `os: 'mac'/'win'/'linux'`, so both degrade to false |
-| `i18n`, `menus`, `notifications` | Not used by this extension |
+| `i18n`, `notifications` | Not used by this extension |

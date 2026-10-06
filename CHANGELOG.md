@@ -6,6 +6,26 @@ All notable changes to Translaneur, from the fork point of
 
 ## [Unreleased]
 
+### Added
+
+- Right-click menu: translate the whole page, translate the selected text in an
+  in-page bubble, and page-wide edit mode where every translation becomes an
+  inline editable area with a floating Save/Cancel bar. Works on web pages and
+  in Thunderbird messages — see `docs/menus.md`.
+- The selection bubble shows only the translation, can be dragged anywhere, and
+  (with the new "keep the translation bubble following the selection" setting,
+  on by default) keeps its relative spot next to the selection while scrolling,
+  rigidly anchored; it hides only when the bubble itself is fully off screen.
+  Turning the setting off leaves the bubble wherever it is placed.
+- Edits cover translations inside links and buttons too. While editing, the
+  page goes quiet: CSS animations pause and controls stop reacting to the
+  pointer, so an editable translation never triggers navigation, submission,
+  or hover effects.
+- Edit mode covers the translated mail subject on Thunderbird — the subject
+  quote block edits and saves like body text.
+- User edits of a translation are remembered per site (or mail sender domain)
+  and take precedence over the cache and provider.
+
 ## [0.3.0] - 2026-10-06
 
 ### Added

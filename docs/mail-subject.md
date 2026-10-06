@@ -53,7 +53,11 @@ path, which rebuilds the block.
 
 The block carries `data-imp-subject`, which is also its skip selector in the
 DOM walk — the body extractor and its delayed rescan never treat it as
-message text.
+message text. It also carries the standard translatable-block identity
+(`data-imp-translated` plus `data-imp-text`, the subject as the source
+payload) with the translation in a standard wrapper and the label kept
+outside it, so page-wide edit mode can edit the subject line like body text
+and save a per-domain override (see `docs/menus.md`).
 
 The feature is Thunderbird-only: on web pages `isMailDisplayDocument` finds no
 Thunderbird header table and the pipeline stays inert.

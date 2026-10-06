@@ -57,6 +57,11 @@ export interface Settings {
   // subject quote block on Thunderbird (lib/mail-subject.ts). Takes effect the
   // next time a page starts translating. See docs/mail-subject.md.
   translateTitle: boolean
+  // Whether the selection-translation bubble stays anchored to the selected
+  // text while the page scrolls. When on it keeps a fixed relative offset
+  // (even after the user drags it); when off it sits where it is placed.
+  // See docs/menus.md.
+  selectionBubbleFollow: boolean
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -70,6 +75,7 @@ const DEFAULT_SETTINGS: Settings = {
   retranslateHotkey: DEFAULT_RETRANSLATE_HOTKEY,
   glossary: '',
   translateTitle: true,
+  selectionBubbleFollow: true,
   openai: {
     apiKey: '',
     baseUrl: 'https://api.openai.com/v1',

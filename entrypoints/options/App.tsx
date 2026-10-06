@@ -478,6 +478,30 @@ export function App() {
                 </p>
               </div>
             </div>
+
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="selection-bubble-follow"
+                checked={settings.selectionBubbleFollow}
+                onCheckedChange={(checked) =>
+                  update({ selectionBubbleFollow: checked === true })
+                }
+              />
+              <div className="grid gap-0.5 leading-none">
+                <Label
+                  htmlFor="selection-bubble-follow"
+                  className="cursor-pointer"
+                >
+                  Keep the translation bubble following the selection
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  When on, the bubble stays anchored to the translated text as
+                  the page scrolls — even after you drag it elsewhere, it keeps
+                  the same relative spot. When off, it stays where it is
+                  placed.
+                </p>
+              </div>
+            </div>
           </section>
 
           <section className="space-y-4">

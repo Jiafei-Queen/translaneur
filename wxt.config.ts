@@ -26,11 +26,18 @@ export default defineConfig({
     // Shared Firefox/Thunderbird extension id (computed form in the original
     // firefox branch: lowercase name + '@jiafei.dev').
     const geckoId = 'translaneur@jiafei.dev'
+    // Context-menu permission differs by engine: Chromium and Safari spell it
+    // `contextMenus`, Gecko (Firefox, Thunderbird) `menus`. Thunderbird has no
+    // `contextMenus` alias, so a single shared name cannot install everywhere;
+    // lib/menus.ts feature-detects the matching runtime namespace.
+    const isChromiumish =
+      env.browser === 'chrome' || env.browser === 'edge' || env.browser === 'safari'
+    const menuPermission = isChromiumish ? 'contextMenus' : 'menus'
     const manifest: UserManifest = {
       name: 'Translaneur',
       description:
         'Bilingual page translation shown below the original. AI translation with no API key, or bring your own provider.',
-      permissions: ['storage', 'scripting', 'webNavigation', 'alarms'],
+      permissions: ['storage', 'scripting', 'webNavigation', 'alarms', menuPermission],
       host_permissions: ['<all_urls>'],
       author: {
         email: 'cxkctrl1303@hotmail.com',

@@ -1,6 +1,8 @@
 import { messager, type TabWakeup, TAB_WAKEUP_PREFIX } from '@/lib/message'
 import { ContentScriptContext } from 'wxt/utils/content-script-context'
 import { selectorsForPath, type SiteRule } from '@/lib/rules'
+import { showSelectionPanel, showNotice } from '@/lib/overlay'
+import { createEditMode, type EditModeController } from '@/lib/edit-mode'
 import {
   extractBlocks,
   clearTranslations,
@@ -10,6 +12,7 @@ import {
   type ExtractOptions,
   PROCESSED_ATTR,
   RESULT_CLASS,
+  EDIT_ATTR,
   SPACER_CLASS,
   HINT_ATTR,
   buildBlockSource,
@@ -38,7 +41,6 @@ import {
 import {
   isMailDisplayDocument,
   extractSubject,
-  composeSubjectLine,
   renderSubjectBlock,
   clearSubjectBlock,
   SUBJECT_SKIP_SELECTOR,
@@ -169,8 +171,7 @@ export default defineUnlistedScript(() => {
     t(`source="${source.slice(0, 40)}"`)
     if (!shouldTranslateTitle(source)) return
     const seq = ++titleRequestSeq
-    messager
-      .sendMessage('translate', { text: source, targetLang, force })
+    requestTranslate(source, force)
       .then((translated) => {
         if (!isTranslating || seq !== titleRequestSeq) return
         // A second page write may have landed while this request was in
@@ -271,11 +272,10 @@ export default defineUnlistedScript(() => {
     if (!source) return
     subjectActive = true
     const seq = ++subjectRequestSeq
-    messager
-      .sendMessage('translate', { text: source, targetLang, force })
+    requestTranslate(source, force)
       .then((translated) => {
         if (!isTranslating || !subjectActive || seq !== subjectRequestSeq) return
-        renderSubjectBlock(document, composeSubjectLine(translated, targetLang))
+        renderSubjectBlock(document, source, translated, targetLang)
       })
       .catch((err) => {
         console.error('[imp-translate] subject translation error:', err)
@@ -324,8 +324,7 @@ export default defineUnlistedScript(() => {
       // with ones a later rescan found. A forced block is re-fetched (and its
       // cache entry overwritten); everything else is read-through.
       const force = forceBlocks?.has(block.element) ?? false
-      messager
-        .sendMessage('translate', { text: block.text, targetLang, force })
+      requestTranslate(block.text, force)
         .then((translated) => {
           if (!isTranslating || isStale(block)) return
           replaceWithTranslation([block], [translated], {
@@ -556,6 +555,9 @@ export default defineUnlistedScript(() => {
   const pendingRecheck = new Set<Element>()
 
   async function retranslateElement(el: Element, newText: string) {
+    // Under edit mode the user's text is authoritative; a recheck must not
+    // rewrite the block they are correcting.
+    if (el.querySelector(`[${EDIT_ATTR}]`)) return
     // An attribute hint changed under our translation: retranslate the value
     // in the DOM now and write it back — a placeholder is a single string.
     const attr = el.getAttribute('data-imp-attr')
@@ -570,10 +572,7 @@ export default defineUnlistedScript(() => {
       const filtered = await filterByLanguage([block])
       if (filtered.length === 0) return
       try {
-        const translated = await messager.sendMessage('translate', {
-          text: newText,
-          targetLang,
-        })
+        const translated = await requestTranslate(newText)
         if (!isTranslating) return
         // A newer recheck may have superseded this one while awaiting.
         if (el.getAttribute('data-imp-text') !== newText) return
@@ -606,10 +605,7 @@ export default defineUnlistedScript(() => {
       const filtered = await filterByLanguage([block])
       if (filtered.length === 0) return
       try {
-        const translated = await messager.sendMessage('translate', {
-          text: newText,
-          targetLang,
-        })
+        const translated = await requestTranslate(newText)
         if (!isTranslating) return
         // A newer recheck may have superseded this one while awaiting.
         if (el.getAttribute('data-imp-text') !== newText) return
@@ -984,6 +980,9 @@ export default defineUnlistedScript(() => {
 
   function stopTranslation(keepToast = false) {
     isTranslating = false
+    // Drop edit mode with the translations it was editing (no save/restore
+    // loop); the wrappers are about to be torn down anyway.
+    if (editController?.isActive()) editController.dispose()
     forceBlocks = null
     if (observer) {
       observer.disconnect()
@@ -1052,6 +1051,21 @@ export default defineUnlistedScript(() => {
       if (cmd.rev === lastCommandRev) return
       lastCommandRev = cmd.rev
     }
+    // Context-menu commands share the channel but mean nothing to the page
+    // translation state machine.
+    if (cmd.kind === 'selection') {
+      const { selectionBubbleFollow } = await getSettings()
+      showSelectionPanel({
+        translated: cmd.translated,
+        follow: selectionBubbleFollow,
+        getRect: selectionRect,
+      })
+      return
+    }
+    if (cmd.kind === 'edit') {
+      void enterEditMode()
+      return
+    }
     if (!cmd.lang) {
       if (isTranslating) {
         stopTranslation()
@@ -1067,6 +1081,147 @@ export default defineUnlistedScript(() => {
       }))
     void startTranslation(cmd.lang, cmd.showToast ?? false, rules, cmd.force ?? false)
   }
+
+  // --- Context menu plumbing ---------------------------------------------
+  // The page's last selection, captured on contextmenu (which fires before the
+  // menu opens) so a later menuCommand can anchor its UI without a round trip.
+  // A cloned Range stays bound to its nodes even after the selection collapses,
+  // so the bubble can be re-anchored on scroll.
+  let lastSelectionRange: Range | null = null
+
+  function captureSelectionRange(): Range | null {
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || !selection.toString().trim()) {
+      return null
+    }
+    return selection.getRangeAt(0).cloneRange()
+  }
+
+  function onContextMenu() {
+    lastSelectionRange = captureSelectionRange()
+  }
+  document.addEventListener('contextmenu', onContextMenu, true)
+
+  // The live anchor for the selection bubble: the captured range first, then
+  // the current selection (right-click usually preserves it).
+  function selectionRect(): DOMRect | null {
+    const fromRange = lastSelectionRange?.getBoundingClientRect() ?? null
+    if (fromRange && (fromRange.width > 0 || fromRange.height > 0)) return fromRange
+    const selection = window.getSelection()
+    if (selection && selection.rangeCount > 0 && selection.toString().trim()) {
+      const rect = selection.getRangeAt(0).getBoundingClientRect()
+      if (rect.width > 0 || rect.height > 0) return rect
+    }
+    return fromRange
+  }
+
+  // closest() stops at a shadow boundary; walk up through hosts so a translated
+  // block inside a shadow root is still found from a light-DOM event target.
+  function composedClosest(el: Element | null, selector: string): Element | null {
+    let current: Element | null = el
+    while (current) {
+      const found = current.closest(selector)
+      if (found) return found
+      const root = current.getRootNode()
+      current = root instanceof ShadowRoot ? root.host : null
+    }
+    return null
+  }
+
+  // --- Page-wide edit mode -----------------------------------------------
+  let editController: EditModeController | null = null
+  let editPreviousMode: RenderMode = 'bilingual'
+  let editWasTranslating = false
+
+  function resolveEditSource(wrapper: HTMLElement): string | null {
+    const block = composedClosest(wrapper, `[data-imp-text]`)
+    return block?.getAttribute('data-imp-text') ?? null
+  }
+
+  function getOrCreateEditController(): EditModeController {
+    if (!editController) {
+      editController = createEditMode({
+        resolveSource: resolveEditSource,
+        onSave: async (entries) => {
+          if (entries.length === 0) return
+          try {
+            await messager.sendMessage('saveTranslationOverrides', { targetLang, entries })
+            showNotice('Translations saved')
+          } catch {
+            showNotice('Could not save translations')
+          }
+        },
+        onFinish: () => {
+          void restoreAfterEdit()
+        },
+      })
+    }
+    return editController
+  }
+
+  // Enter edit mode: switch to bilingual (truthful inline editing is only
+  // possible there), translating the page first if needed, then make every
+  // translation editable. The render decorator seam catches wrappers as they
+  // land, so there is nothing to await here.
+  async function enterEditMode() {
+    const controller = getOrCreateEditController()
+    if (controller.isActive()) return
+    const settings = await getSettings()
+    editWasTranslating = isTranslating
+    editPreviousMode = renderMode
+    if (!isTranslating) targetLang = settings.targetLang
+    if (renderMode !== 'bilingual') {
+      await saveSettings({ renderMode: 'bilingual' })
+    }
+    if (!isTranslating || editPreviousMode !== 'bilingual') {
+      await restartTranslation(targetLang, false)
+    }
+    controller.enter()
+  }
+
+  // Put the page back the way it was before edit mode: the previous render mode
+  // if it was translating, or fully restored if it was not.
+  async function restoreAfterEdit() {
+    if (!editWasTranslating) {
+      stopTranslation()
+      void messager.sendMessage('stopSelfTab')
+      return
+    }
+    if (editPreviousMode !== 'bilingual') {
+      await saveSettings({ renderMode: editPreviousMode })
+      await restartTranslation(targetLang, false)
+    }
+  }
+
+  // Site/sender-domain key for this document, resolved once and stamped on
+  // every translate request so the background can apply a saved override.
+  let siteKey: string | null | undefined
+  async function getSiteKey(): Promise<string | null> {
+    if (siteKey !== undefined) return siteKey
+    try {
+      siteKey = await messager.sendMessage('getSiteKey')
+    } catch {
+      siteKey = null
+    }
+    return siteKey
+  }
+
+  async function requestTranslate(text: string, force = false): Promise<string> {
+    const site = await getSiteKey()
+    return messager.sendMessage('translate', {
+      text,
+      targetLang,
+      force,
+      site: site ?? undefined,
+    })
+  }
+
+  messager.onMessage('menuCommand', ({ data }) => {
+    // One overlay per tab: the wake-up path is top-frame only, so the direct
+    // message must match or an iframe would render a second panel.
+    if (window.self !== window.top) return
+    void applyCommand(data)
+  })
 
   messager.onMessage('startTranslation', ({ data }) => {
     void applyCommand({

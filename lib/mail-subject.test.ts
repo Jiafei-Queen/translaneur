@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   clearSubjectBlock,
-  composeSubjectLine,
   extractSubject,
   isMailDisplayDocument,
   renderSubjectBlock,
@@ -21,7 +20,7 @@ function makeMailDoc(
   return doc
 }
 
-describe('subjectLabel / composeSubjectLine', () => {
+describe('subjectLabel', () => {
   it('labels the subject in the target language', () => {
     expect(subjectLabel('zh')).toBe('标题：')
     expect(subjectLabel('en')).toBe('Subject: ')
@@ -32,15 +31,6 @@ describe('subjectLabel / composeSubjectLine', () => {
     expect(subjectLabel('zh-CN')).toBe('标题：')
     expect(subjectLabel('xx')).toBe('Subject: ')
     expect(subjectLabel('')).toBe('Subject: ')
-  })
-
-  it('composes the quote block line', () => {
-    expect(composeSubjectLine('使用 Langfuse 评估', 'zh')).toBe(
-      '标题：使用 Langfuse 评估',
-    )
-    expect(composeSubjectLine('Langfuse を評価する', 'ja')).toBe(
-      '件名：Langfuse を評価する',
-    )
   })
 })
 
@@ -70,20 +60,31 @@ describe('isMailDisplayDocument', () => {
 })
 
 describe('renderSubjectBlock / clearSubjectBlock', () => {
-  it('inserts the quote block above the message body', () => {
+  it('inserts the labelled translation above the message body', () => {
     const doc = makeMailDoc()
-    renderSubjectBlock(doc, '标题：使用 Langfuse 评估')
+    renderSubjectBlock(doc, 'Use Langfuse', '使用 Langfuse 评估', 'zh')
     const block = doc.querySelector(SUBJECT_SKIP_SELECTOR)!
-    expect(block.textContent).toBe('标题：使用 Langfuse 评估')
     expect(block.tagName).toBe('BLOCKQUOTE')
     expect(block.getAttribute(SUBJECT_BLOCK_ATTR)).toBe('')
     expect(block.nextElementSibling?.className).toBe('moz-text-plain')
+    // The label sits outside the wrapper so edits cover only the subject.
+    expect(block.textContent).toBe('标题：使用 Langfuse 评估')
+  })
+
+  it('carries the translatable-block identity edit mode needs', () => {
+    const doc = makeMailDoc()
+    renderSubjectBlock(doc, 'Use Langfuse', '使用 Langfuse 评估', 'zh')
+    const block = doc.querySelector(SUBJECT_SKIP_SELECTOR)!
+    expect(block.getAttribute('data-imp-translated')).toBe('true')
+    expect(block.getAttribute('data-imp-text')).toBe('Use Langfuse')
+    const wrapper = block.querySelector('.imp-translate-result')!
+    expect(wrapper.textContent).toBe('使用 Langfuse 评估')
   })
 
   it('replaces its previous block instead of stacking', () => {
     const doc = makeMailDoc()
-    renderSubjectBlock(doc, '标题：第一版')
-    renderSubjectBlock(doc, '标题：第二版')
+    renderSubjectBlock(doc, 'Use Langfuse', '第一版', 'zh')
+    renderSubjectBlock(doc, 'Use Langfuse', '第二版', 'zh')
     const blocks = doc.querySelectorAll(SUBJECT_SKIP_SELECTOR)
     expect(blocks).toHaveLength(1)
     expect(blocks[0]!.textContent).toBe('标题：第二版')
@@ -95,7 +96,7 @@ describe('renderSubjectBlock / clearSubjectBlock', () => {
       '<table class="moz-header-part1 moz-main-header"></table>' +
       '<fieldset><div class="moz-text-plain">attachment wrapper</div></fieldset>' +
       '<div class="moz-text-html">body</div>'
-    renderSubjectBlock(doc, 'Subject: hi')
+    renderSubjectBlock(doc, 'hi', '你好', 'zh')
     const block = doc.querySelector(SUBJECT_SKIP_SELECTOR)!
     expect(block.nextElementSibling?.className).toBe('moz-text-html')
   })
@@ -103,13 +104,13 @@ describe('renderSubjectBlock / clearSubjectBlock', () => {
   it('falls back to the top of the body without a container', () => {
     const doc = makeMailDoc()
     doc.body.innerHTML = '<table class="moz-header-part1 moz-main-header"></table>'
-    renderSubjectBlock(doc, 'Subject: hi')
+    renderSubjectBlock(doc, 'hi', '你好', 'zh')
     expect(doc.body.firstElementChild?.getAttribute(SUBJECT_BLOCK_ATTR)).toBe('')
   })
 
   it('clear removes the block and its stylesheet', () => {
     const doc = makeMailDoc()
-    renderSubjectBlock(doc, '标题：使用 Langfuse 评估')
+    renderSubjectBlock(doc, 'Use Langfuse', '使用 Langfuse 评估', 'zh')
     expect(doc.getElementById('imp-subject-style')).not.toBeNull()
     clearSubjectBlock(doc)
     expect(doc.querySelector(SUBJECT_SKIP_SELECTOR)).toBeNull()

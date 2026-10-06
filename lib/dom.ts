@@ -64,6 +64,10 @@ const RESULT_CLASS = 'imp-translate-result'
 // so render.ts tags the node it creates and the two modules cannot drift.
 const SPACER_CLASS = 'imp-translate-spacer'
 const PROCESSED_ATTR = 'data-imp-translated'
+// Marks a translation wrapper the user is editing in-page (lib/edit-mode.ts).
+// render.ts skips overwriting it, so a live re-translation cannot clobber the
+// text under the caret.
+const EDIT_ATTR = 'data-imp-editing'
 const WRAP_ATTR = 'data-imp-wrap'
 // Prior inline values of page styles the extension overwrote, as a JSON map of
 // CSS property name → the value it had before. A property absent from the map
@@ -966,4 +970,4 @@ export function clearTranslations(root: Element = document.body) {
   root.removeAttribute('data-imp-noop')
 }
 
-export { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, STYLE_ORIG_ATTR, OVERRIDDEN_PROPS, getVisibleText }
+export { RESULT_CLASS, SPACER_CLASS, PROCESSED_ATTR, EDIT_ATTR, STYLE_ORIG_ATTR, OVERRIDDEN_PROPS, getVisibleText }
