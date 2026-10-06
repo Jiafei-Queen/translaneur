@@ -131,7 +131,7 @@ practice; revisit if a false positive shows up.
 
 ## TB-3 — mail state machine regression after the messageDisplay drive
 
-**Status — fixed; pending live verification in Thunderbird.** Two root
+**Status — fixed, verified live (TB 157).** Two root
 causes behind three symptoms, both introduced by 5240e1b ("drive mail
 translation from messageDisplay events"):
 
