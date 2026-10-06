@@ -33,3 +33,6 @@ playwright-report
 
 # synced by @extport/wxt from wxt.config.ts
 extport.config.json
+
+# Thunderbird port spike (one-off probe extension)
+spike/

@@ -52,14 +52,25 @@ Output: results recorded at the bottom of [spike.md](spike.md).
 
 Assumes step 1's gate. No logic changes — the build lands in Thunderbird:
 
-- a Thunderbird branch in `wxt.config.ts`'s manifest callback (the existing
-  `env.browser === 'firefox'` hook suffices): gecko id, `strict_min_version`,
-  `messagesModify` permission, `allowed_spaces`
+- a Thunderbird branch in `wxt.config.ts`'s manifest callback, keyed on a
+  dedicated `-b thunderbird` target: gecko id, `strict_min_version`,
+  `messagesRead` permission, `allowed_spaces` (plus a
+  `build:manifestGenerated` hook, since WXT emits `background.scripts` only
+  for the literal `firefox` name)
 - a `wxt build` bundle that installs as a temporary add-on, with popup and
   options pages opening normally
 
 Gate: installable, both UI pages render. Everything after this verifies its
 builds under both browser and Thunderbird targets.
+
+**Gate passed** (TB 157, temporary add-on). Better than the gate asked: mail
+translation, hotkeys, and bilingual/translation-only modes already work on
+most messages via the accidental `executeScript` path (popup → active tab).
+Silent-failure mails were observed and first attributed to the spike's
+predicted surface blind spots (preview pane / just-opened tab); follow-up
+testing pinned them to content type instead — text/plain mail, surface
+independent. Diagnosed as TB-1 in `bugs.md` (the message body hides inside
+a `<pre>` the extractor skips), a Step 4 fix.
 
 ## Step 3 — Background trigger skeleton
 
@@ -67,13 +78,16 @@ The port's core change: replace the code in `entrypoints/background.ts` that
 assumes pages arrive by web navigation (~200–300 lines).
 
 - `webNavigation.onCommitted/onDOMContentLoaded` →
-  `messageDisplay.onMessageDisplayed` + `messageDisplayScripts.register()`
-- triage injected targets by `tab.type` (`messageDisplay` | `content`), never
-  `mail` tabs
+  `messageDisplay.onMessagesDisplayed` + `scripting.messageDisplay.registerScripts()`
+  (MV3 names, spike-verified; deliver `inject.js` via registered scripts only —
+  `executeScript` hangs on `mail` and just-created `messageDisplay` tabs)
+- triage injected targets by `tab.type` (`messageDisplay` | `content` | `mail`);
+  the 3-pane preview pane is a `mail` tab and is covered by registered scripts
 - state-key decision: per `tabId` or per `(tabId, messageId)` — a message tab
   displays a *sequence* of messages, so the current
   `tab_translating_${tabId}` key may over-persist; decide during
-  implementation (`storage.session` supports either)
+  implementation (`storage.session` supports either; `getDisplayedMessages()`
+  supplies the message id)
 - preserve the existing race-pattern *semantics*, not its code: write the
   session key before content-script state flips, an in-flight barrier keyed by
   tab, state cleared on message switch (replacing the `transitionType` reload
@@ -88,8 +102,10 @@ Concentrated debugging on the surfaces step 1's spot-checks could not fully
 cover, over real mail forms:
 
 - HTML newsletters, with remote content both blocked and allowed
-- plain-text mail (`<pre>`): appended translation vs. unsupported — a product
-  decision to make explicitly
+- plain-text mail — diagnosed as TB-1 (`bugs.md`): the body hides inside a
+  `<pre class="moz-quote-pre">` that the walker skips. Fix the adapter or
+  pull it forward; "appended translation vs. unsupported" is then a small
+  product decision, not an unknown
 - the 3-pane preview pane, if step 1 allowed it
 - long threads, attachment structures, and both render modes
 
@@ -109,8 +125,9 @@ re-translate.
 - messages-copy review: browser-qualified strings such as the options page's
   "Chrome can't apply shortcuts" need Thunderbird's actual behaviour
   (`commands.update()` works there)
-- pre-review self-check of the `messagesModify` usage description — it is a
-  high-sensitivity permission ATN reviews closely
+- pre-review self-check of the `messagesRead` usage description — it is a
+  sensitive permission ATN reviews, though the spike proved the port can
+  avoid the higher-sensitivity `messagesModify`
 
 ## What starts first
 

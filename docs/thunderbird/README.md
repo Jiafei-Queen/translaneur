@@ -8,11 +8,13 @@ Maintainer-facing. Branch: `thunderbird-port`.
 
 ## Verdict
 
-Feasible. About 85% of the codebase carries over unchanged; the work is an
-adaptation layer for injection triggers (Thunderbird's message display instead
-of web navigation) plus one unknown that must be verified before committing:
-whether the 3-pane preview pane can be scripted at all — see
-[spike.md](spike.md).
+Feasible — **spike passed (go), 2026-10-05**. About 85% of the codebase
+carries over unchanged; the work is an adaptation layer for injection
+triggers (Thunderbird's message display instead of web navigation). The one
+large unknown — whether the 3-pane preview pane can be scripted — is
+resolved: it can, via `scripting.messageDisplay.registerScripts()`, and the
+spike also proved `messagesRead` suffices where `messagesModify` was assumed
+(see [spike.md](spike.md) Results).
 
 Overall: a medium-size port, roughly 1–2 weeks including testing, not a
 rewrite. Everything invested in the translation engine (bilingual rendering,

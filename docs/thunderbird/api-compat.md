@@ -21,6 +21,8 @@ works in both.
 | `action.setIcon` (per-tab), `onClicked`, `setPopup` | 105 | translating-state icon, toggle handler. `theme_icons` (also 105+) gives the theme-aware icon Chrome lacks |
 | `commands.getAll / update / onCommand` | 66 | hotkeys. `commands.update()` — which the code feature-detects and falls back without on Chrome — **is** supported in Thunderbird, so `applyHotkey` runs its real path and the options page's "can't apply on Chrome" copy is unnecessarily pessimistic there |
 | `scripting.executeScript` — `files`, `func` + `args`, `target.frameIds` / `allFrames`, `injectImmediately` | 102 | `injectContentScript` and the inline reload check in `background.ts`; `world: 'MAIN'` since 128 if ever needed |
+| `scripting.messageDisplay.registerScripts` | 128 | auto-inject `inject.js` into displayed messages — spike-verified working on all three reading surfaces incl. the 3-pane preview pane (`mail` tab); requires `messagesRead` + `scripting` |
+| `messageDisplay.onMessagesDisplayed` | 81 (MV3 name) | trigger/state-reset point; second arg is a `MessageList`; requires `messagesRead`. Spike-verified with a stable `tabId` across switches |
 | `runtime.onInstalled / onStartup / openOptionsPage / getPlatformInfo / getManifest` | 45–52 | lifecycle hooks, options link |
 | `tabs.query / get / remove / onRemoved` | 62 | active-tab lookup (`sender.tab?.id` fallback), session-key cleanup |
 | `runtime.sendMessage → tabs.sendMessage(tabId, msg, { frameId })`, `sender.tab` / `sender.frameId` | 82 | the whole `@webext-core/messaging` RPC layer, including frame-targeted `startTranslation` |
@@ -31,8 +33,8 @@ works in both.
 
 | Concern | Browser assumption | Thunderbird reality |
 | --- | --- | --- |
-| What a "page" is | any URL, navigation events fire | Translation targets **message display pages** (message tabs in the main window, or a stand-alone message window). Mail display is not a navigation; `webNavigation` never fires for it. Triggers must move to `messageDisplay.onMessageDisplayed` / `messageDisplayScripts.register()` |
-| Injection permission | `host_permissions` alone | Needs the `messagesModify` permission (listed in `permissions`, not host permissions) and, for registered scripts, `messageDisplayScripts` |
+| What a "page" is | any URL, navigation events fire | Translation targets **message display pages** (message tabs in the main window, or a stand-alone message window). Mail display is not a navigation; `webNavigation` never fires for it. Triggers must move to `messageDisplay.onMessagesDisplayed` (MV3 name) / `scripting.messageDisplay.registerScripts()` |
+| Injection permission | `host_permissions` alone | Needs the `messagesRead` permission (listed in `permissions`, not host permissions) plus `scripting` for registered scripts — spike-verified on TB 156/157; `messagesModify` is **not** required |
 | Background lifecycle | Chrome MV3 service worker: no DOM, killed when idle | **Event page**: has a DOM (`runtime.getBackgroundPage()`), stays alive with Thunderbird. In-memory state (`bingSession`, `services` map, `commitInFlight`) survives; `idb` cache just works |
 | Toolbar surface | browser toolbar | Unified toolbar (`allowed_spaces` in the manifest's `action` block); also a `message_display_action` for stand-alone message windows |
 
@@ -42,13 +44,21 @@ MV3 is supported since TB 128; target `strict_min_version: 140.0` (ESR) or
 higher. Relative to `wxt.config.ts`:
 
 - `browser_specific_settings.gecko.id` — the Firefox build already generates
-  `translaneur@jiafei.dev`; reuse it
-- add `messagesModify` to `permissions`
-- `action` gains `allowed_spaces` / `default_windows` so the button appears
-  where it is meaningful
+  `translaneur@jiafei.dev`; reuse it, plus `strict_min_version: '140.0'`
+- add `messagesRead` to `permissions` (spike-verified: `messagesRead` +
+  `scripting` is what `scripting.messageDisplay.*` requires;
+  `messagesModify` is not needed)
+- `action` gains `allowed_spaces: ['mail']` / `default_windows:
+  ['normal', 'messageDisplay']` so the button appears in the unified
+  toolbar's mail space and in stand-alone message windows — one button, one
+  `action.*` code path, no separate `message_display_action` key
+- build target is `-b thunderbird` (custom name): WXT emits the MV3 event
+  page (`background.scripts`) only for the literal `firefox` name, so a
+  `build:manifestGenerated` hook rewrites `service_worker` → `scripts` for
+  thunderbird
 - `web_accessible_resources` for `/inject.js` keeps its browser form for
-  content tabs; message display scripts reference files through the
-  `messageDisplayScripts` API instead
+  content tabs; message display scripts are registered through the
+  `scripting.messageDisplay` API instead
 - `commands` carries over unchanged, including `suggested_key`
 
 ## Not available (and what loses coverage because of it)

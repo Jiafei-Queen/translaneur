@@ -23,6 +23,9 @@ export default defineConfig({
   }),
   manifestVersion: 3,
   manifest: (env) => {
+    // Shared Firefox/Thunderbird extension id (computed form in the original
+    // firefox branch: lowercase name + '@jiafei.dev').
+    const geckoId = 'translaneur@jiafei.dev'
     const manifest: UserManifest = {
       name: 'Translaneur',
       description:
@@ -67,16 +70,47 @@ export default defineConfig({
     if (env.browser === 'firefox') {
       manifest.browser_specific_settings = {
         gecko: {
-          id:
-            manifest.name!.toLowerCase().replaceAll(/[^a-z0-9]/g, '-') +
-            '@jiafei.dev',
+          id: geckoId,
         },
       }
       // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/author
       // @ts-expect-error
       manifest.author = 'Jiafei'
     }
+    if (env.browser === 'thunderbird') {
+      manifest.browser_specific_settings = {
+        gecko: {
+          id: geckoId,
+          // ESR floor: scripting.messageDisplay is 128+, but 140 is the
+          // current ESR the port docs target.
+          strict_min_version: '140.0',
+        },
+      }
+      // @ts-expect-error
+      manifest.author = 'Jiafei'
+      // Spike-verified (docs/thunderbird/spike.md): message display injection
+      // needs messagesRead + scripting; messagesModify is not required.
+      manifest.permissions = [...(manifest.permissions ?? []), 'messagesRead']
+      // Thunderbird-only toolbar keys: show the button in the mail space of
+      // the unified toolbar and in stand-alone message windows.
+      manifest.action = {
+        ...manifest.action,
+        allowed_spaces: ['mail'],
+        default_windows: ['normal', 'messageDisplay'],
+      } as typeof manifest.action
+    }
     return manifest
+  },
+  hooks: {
+    // WXT only knows the "firefox" name for Gecko manifests: for any other
+    // browser it emits an MV3 `background.service_worker`, which Thunderbird
+    // does not support (it needs the event-page `background.scripts` form).
+    // The hook runs before stripKeys, so the rewrite sticks.
+    'build:manifestGenerated': (_wxt, manifest) => {
+      if (_wxt.config.browser !== 'thunderbird') return
+      const worker = (manifest.background as { service_worker?: string })?.service_worker
+      if (worker) manifest.background = { scripts: [worker] } as typeof manifest.background
+    },
   },
   webExt: {
     disabled: true,

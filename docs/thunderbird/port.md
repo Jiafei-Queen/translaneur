@@ -23,10 +23,23 @@ Gecko engine, on the same standard Web APIs.
 
 ## Tier 2 — thin adapter (targeted edits)
 
-**Manifest / build** — `wxt.config.ts` gains a Thunderbird branch (same
-`env.browser === 'firefox'` hook, or a small custom target): gecko id,
-`messagesModify` permission, `allowed_spaces`. A `wxt build -b firefox` bundle
-likely installs as-is; the deltas are manifest keys, not code.
+**Manifest / build** — implemented in `wxt.config.ts` as a first-class
+`-b thunderbird` target (`build:thunderbird` / `zip:thunderbird` scripts):
+gecko id, `strict_min_version: '140.0'`, `messagesRead` permission,
+`action.allowed_spaces: ['mail']` + `action.default_windows:
+['normal', 'messageDisplay']`. Two WXT quirks make the firefox hook
+insufficient on its own:
+
+- `-b firefox` alone cannot work: the Thunderbird deltas (`messagesRead`,
+  `allowed_spaces`, `strict_min_version`) would then leak into every Firefox
+  build, or need a separate env-var discriminator on top of the same target
+- WXT only emits the Gecko MV3 event-page form (`background.scripts`) for
+  the literal `firefox` name — for any other target it emits
+  `background.service_worker`, so a `build:manifestGenerated` hook rewrites
+  it to the scripts form (runs before `stripKeys`, so it sticks)
+
+WXT's virtual `browser` global resolves to `globalThis.browser` whenever it
+exists (Gecko), so no polyfill concern for the thunderbird target.
 
 **`entrypoints/background.ts` — the trigger skeleton** (~200–300 lines of the
 file). Two lifelines assume pages arrive by web navigation:
@@ -35,54 +48,75 @@ file). Two lifelines assume pages arrive by web navigation:
   across navigations and detect reloads via `transitionType`
 - `action.onClicked` targets the active content tab
 
-In Thunderbird, mail display is not a navigation. Replace with:
+In Thunderbird, mail display is not a navigation. Replace with (names and
+permissions verified by the spike, see [spike.md](spike.md) Results):
 
-- `messageDisplayScripts.register()` to auto-inject `inject.js` into newly
-  opened messages (needs `messagesModify`)
-- `messageDisplay.onMessageDisplayed` where `onDOMContentLoaded` drove
-  state restoration and auto-translate
-- Tab triage by `tab.type` (`messageDisplay` | `content`): skip `mail` tabs —
-  the 3-pane interface itself cannot host scripts; query with `tabs` permission
-  to read `url`/`title` as today
+- `scripting.messageDisplay.registerScripts()` to auto-inject `inject.js`
+  into displayed messages (needs `messagesRead` + `scripting`; the spike
+  confirmed `messagesModify` is **not** required — it can be avoided at ATN
+  review). Registered scripts only apply to newly displayed messages; for
+  ones already open at startup, inject with `scripting.executeScript`
+- `messageDisplay.onMessagesDisplayed` (MV3 renamed from
+  `onMessageDisplayed`; second argument is a `MessageList`, not a single
+  `MessageHeader`) where `onDOMContentLoaded` drove state restoration and
+  auto-translate
+- Tab triage by `tab.type` (`messageDisplay` | `content` | `mail`): the
+  3-pane preview pane is a `mail` tab and **is** scriptable — but only via
+  registered scripts; `scripting.executeScript` into a `mail` tab (or a
+  just-created `messageDisplay` tab) hangs instead of failing. Deliver
+  `inject.js` exclusively through `registerScripts`; never fall back to
+  `executeScript` for mail surfaces
 
 The existing race scaffolding is the pattern to keep, not the code to keep:
 translate-key-in-`storage.session` before content-script state flips; an
 in-flight barrier keyed by tab for sub-frame ordering; reload clears state.
 Their mail-display equivalents need the same ordering guarantees around
-`onMessageDisplayed`, which can fire per displayed message in one long-lived
+`onMessagesDisplayed`, which can fire per displayed message in one long-lived
 tab.
 
-Double-duty adjustment: `injectContentScript` targets message display tabs via
-`scripting.executeScript` exactly as for content tabs — the target shape does
-not change, only when it is called. The `reload` check
+Delivery note from the spike: `registerScripts` and `executeScript` run in
+**different JS worlds** — `window` state is not shared between them. With a
+single delivery path (registered scripts only) this is moot; a mixed
+delivery would need DOM-borne state.
+
+Double-duty adjustment: the spike showed `executeScript` hangs on `mail`
+tabs and just-created `messageDisplay` tabs, so `injectContentScript`'s
+on-demand path stays limited to `content` tabs exactly as in the browser;
+mail surfaces get the registered script only. The `reload` check
 (`performance.getEntriesByType('navigation')`) does not apply to messages;
 switching message resets state instead.
 
 **State keying** — `tab_translating_${tabId}` keys translating state by tab,
 but a message-display tab shows a *sequence* of messages. Key per
-`(tabId, messageId)` — `messageDisplay.getDisplayedMessage(tabId)` supplies the
-id — or accept tab-level state and reset on every `onMessageDisplayed`. Decide
-during implementation; `storage.session` supports either.
+`(tabId, messageId)` — `messageDisplay.getDisplayedMessages(tabId)` (MV3;
+returns a `MessageList`) supplies the id — or accept tab-level state and
+reset on every `onMessagesDisplayed`. Decide during implementation;
+`storage.session` supports either.
 
-## Tier 3 — blocked on the spike
+## Tier 3 — resolved by the spike
 
-**Message display DOM shape, CSP, and the 3-pane preview.** Whether
-`extractBlocks(document.body)` can walk mail as it walks a page; whether
-`lib/addStyle.ts`'s `<style>` insertion and renderer blocks survive
-Thunderbird's remote-content sanitization; and above all whether the 3-pane
-preview pane is scriptable — the most common reading surface. All are answered
-by [spike.md](spike.md); none have a documented yes/no.
+The three unknowns are answered (see [spike.md](spike.md) Results):
 
-If the spike fails on the preview pane, the port still ships — a user reading
-mail in a message tab or stand-alone window gets full translation — but the
-everyday surface is restricted, which should be weighed before investing in
-tier 3 elsewhere.
+- **DOM shape**: the rendered message HTML is inline in `document.body` on
+  every surface — no iframes. `extractBlocks` works as-is, but the body also
+  contains Thunderbird's own header chrome (`table.moz-header-part1/2`), so
+  the walker must start at the message content container (or skip those
+  header tables), not raw `body.children`. Plain-text mail renders as
+  `div.moz-text-plain`, not `<pre>`.
+- **Styles**: injected `<style>` + styled nodes render with remote content
+  both allowed and blocked. `lib/render.ts` / `lib/addStyle.ts` unchanged.
+- **Preview pane**: scriptable via `registerScripts` — no narrowing; the
+  everyday surface is fully covered.
+
+Remaining spike-informed adjustments fold into tiers 1–2: skip the header
+chrome in extraction, single delivery path via `registerScripts`, and the
+MV3 API names noted above.
 
 ## Deliberately out of scope
 
 - Compose-window translation (`composeScripts` exists, but translating
   outgoing mail is a different product and `README.md`'s scope excludes it)
-- Attachments and `messageDisplay.getDisplayedMessage` body/HTML APIs as a
+- Attachments and `messageDisplay.getDisplayedMessages` body/HTML APIs as a
   translation source — the rendered DOM is the source, as in the browser
 - Mobile-targeted code paths (`isMobile` etc.) — left in place, where they
   evaluate to false
@@ -91,10 +125,12 @@ tier 3 elsewhere.
 
 1. Spike ([spike.md](spike.md)) — go/no-go, half a day
 2. Manifest + build target, extension installs and popup/options open in TB
-3. Background trigger skeleton: messageDisplay injection + `onMessageDisplayed`
+3. Background trigger skeleton: messageDisplay injection via
+   `scripting.messageDisplay.registerScripts()` + `onMessagesDisplayed`
    state machine; toggle via action button and `commands` all work
 4. Rendering validation on real mail: HTML newsletter, plain-text mail,
    sanitized remote content, long threads
 5. Providers E2E in TB (Imp, Google, Bing, an OpenAI key)
 6. ATN packaging: `VENDOR.md` + source submission, messaging copy review
-   (`messagesModify` is a high-sensitivity permission)
+   (`messagesRead` is a sensitive permission, though less so than the
+   `messagesModify` the spike proved unnecessary)
