@@ -1,4 +1,4 @@
-import { messager } from '@/lib/message'
+import { messager, type TabWakeup, TAB_WAKEUP_PREFIX } from '@/lib/message'
 import { ContentScriptContext } from 'wxt/utils/content-script-context'
 import { selectorsForPath, type SiteRule } from '@/lib/rules'
 import {
@@ -35,6 +35,13 @@ export default defineUnlistedScript(() => {
   const w = window as unknown as Record<string, unknown>
   if (w.__imp_injected) return
   w.__imp_injected = true
+  // Thunderbird can deliver this script twice into one document — the
+  // registered message-display script and the background's executeScript
+  // fallback run in different JS worlds (spike probe 4), so a window global
+  // cannot dedupe them. The DOM is shared across worlds and this check-and-set
+  // is synchronous, so exactly one pipeline runs per document.
+  if (document.documentElement.hasAttribute('data-imp-script')) return
+  document.documentElement.setAttribute('data-imp-script', '')
 
   if (window.self !== window.top && (window.innerWidth < 100 || window.innerHeight < 40)) return
 
@@ -842,14 +849,70 @@ export default defineUnlistedScript(() => {
   // return or await the work: the background only needs the message delivered,
   // not the translation to finish, and waiting here would keep the sender's
   // response channel (and the SW) busy for the whole first scan.
+  //
+  // One remote command can arrive twice — as the storage wake-up below and as
+  // this direct message — and a forced start re-walks the page, so a double
+  // apply would walk (and bill) it twice. Commands carry a revision; one
+  // revision applies once, a command without one always applies.
+  let myTabId: number | null = null
+  let lastCommandRev = -1
+
+  async function applyCommand(cmd: TabWakeup & { rules?: SiteRule[] }) {
+    if (cmd.rev !== undefined) {
+      if (cmd.rev === lastCommandRev) return
+      lastCommandRev = cmd.rev
+    }
+    if (!cmd.lang) {
+      if (isTranslating) {
+        stopTranslation()
+        maybeShowToast()
+      }
+      return
+    }
+    if (isTranslating && !cmd.force) return
+    const rules =
+      cmd.rules ??
+      (await messager.sendMessage('getMatchedRulesForHostname', {
+        hostname: location.hostname,
+      }))
+    void startTranslation(cmd.lang, cmd.showToast ?? false, rules, cmd.force ?? false)
+  }
+
   messager.onMessage('startTranslation', ({ data }) => {
-    startTranslation(data.targetLang, data.showToast, data.rules, data.force)
+    void applyCommand({
+      lang: data.targetLang,
+      rules: data.rules,
+      force: data.force,
+      showToast: data.showToast,
+      rev: data.rev,
+    })
   })
   messager.onMessage('stopTranslation', () => {
-    stopTranslation()
-    maybeShowToast()
+    void applyCommand({ lang: null })
   })
   messager.onMessage('getState', () => isTranslating)
+
+  // The storage wake-up channel (background ringTabWakeup) — the start/stop
+  // delivery that reaches a Thunderbird displayed message, whose script
+  // background→content messaging may not. Keyed per tab; this document's tab
+  // id arrives over the content→background direction the spike verified, and
+  // a wake-up that beats it is covered by the direct message or auto-init.
+  // Top frame only, like auto-init: sub-frames are driven per frame by the
+  // background's webNavigation handlers.
+  void messager
+    .sendMessage('getSelfTabId')
+    .then((id) => {
+      myTabId = id
+    })
+    .catch(() => {})
+  browser.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local') return
+    if (window.self !== window.top) return
+    if (myTabId === null) return
+    const next = changes[`${TAB_WAKEUP_PREFIX}${myTabId}`]?.newValue as TabWakeup | undefined
+    if (!next) return
+    void applyCommand(next)
+  })
 
   window.addEventListener('pageshow', async (e) => {
     if (!e.persisted) return
@@ -872,10 +935,12 @@ export default defineUnlistedScript(() => {
     }
   })
 
-  // Auto-init: when inject.js is loaded (via injectContentScript from
-  // startTranslationForTab), check if this tab should be translating.
-  // This avoids the race where the startTranslation message arrives before
-  // the content script's message listener is registered in some frames.
+  // Auto-init: when inject.js is loaded into a document, check whether this
+  // tab should be translating. Covers two things: the race where the
+  // startTranslation message arrives before this script's listener is
+  // registered, and Thunderbird's per-message document rewrite — switching
+  // mail keeps translating, and each fresh document picks the same session
+  // key up here and translates the new message.
   //
   // Only the top frame auto-inits. Sub-frames are driven explicitly by the
   // background's webNavigation handlers (which send a per-frame

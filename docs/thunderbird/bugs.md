@@ -128,3 +128,86 @@ Chinese translation in translation-only mode; the plain-text (TB-1) path and
 whole body (a code sample a newsletter embeds directly under
 `div.moz-text-html`) should be translated. The selector is exact enough in
 practice; revisit if a false positive shows up.
+
+## TB-3 — mail state machine regression after the messageDisplay drive
+
+**Status — fixed; pending live verification in Thunderbird.** Two root
+causes behind three symptoms, both introduced by 5240e1b ("drive mail
+translation from messageDisplay events"):
+
+1. the trigger chain moved to background → content-script messaging — the one
+   direction the spike never validated on mail surfaces — while the
+   executeScript + auto-init chain it replaced was the part that worked;
+2. `onMessagesDisplayed` treated every message switch as a page reload and
+   cleared `tab_translating_${tabId}`, designing out the expected
+   "translating persists across messages" behaviour.
+
+**Found**: real-mail testing after 5240e1b + a57ba9d. Reported by the user:
+
+- Alt+T starts translation but can never stop it;
+- starting on the current message translates nothing — yet switching to the
+  next message translates *that* one, while the state already reads off;
+- translation turns off on every message switch (expected: stays on and
+  translates the new message).
+
+**Root cause 1 — the current document never hears the command.**
+`startTranslationForTab` skips `executeScript` for mail surfaces and sends
+`startTranslation` via `tabs.sendMessage`. Two ways that message never lands:
+the registered message-display script only covers messages displayed *after*
+`registerScripts` ran (the message already open at startup or at temporary
+add-on load has no script at all), and background → displayed-message
+delivery is itself unverified — spike probe 3 proved `executeScript` hangs
+on mail surfaces and probe 4 proved the two injection paths don't even share
+a JS world, but the spike only ever reported *from* the document
+(`runtime.sendMessage`), never *to* it. `getState` fails the same way, and
+`isPageTranslating` swallows the failure as "idle", so the toggle always
+takes the start branch — Alt+T can never stop.
+
+**Root cause 2 — the switch-as-reload clear races the next document.**
+The `onMessagesDisplayed` handler cleared the key on every display. That
+alone is the reported "switching turns translation off": in the web model a
+navigation keeps translating and only `transitionType === 'reload'` clears,
+so a switch should keep the run alive and let the fresh document's auto-init
+translate the new message. Worse, the clear raced that auto-init (both hop
+through `storage.session`): when auto-init read the key first, the new
+message translated and the clear then flipped icon and state to off — the
+reported "translated but state reads off". The `stopTranslation` backstop
+could not close the race: it rides the same broken direction, and even when
+delivered it can land before auto-init's late start and be overwritten.
+
+**Fix**:
+
+- toggling decides from the session key (`isTabActivelyTranslating`), which
+  needs no content script at all; the content-script probe stays as a
+  web-only second chance;
+- a message switch keeps translating: `onMessagesDisplayed` clears nothing
+  (it only re-applies the icon), and each new message document's auto-init
+  picks the same session key up;
+- commands reach a displayed message over storage: `ringTabWakeup` writes
+  `tab_wakeup_${tabId}` in `storage.local` — the only area content scripts
+  can observe; `storage.session` is not exposed to them — next to the direct
+  message, both stamped with one revision so a double delivery applies once
+  (a forced start would otherwise re-walk and re-bill the page). A wake-up is
+  a command, not state: the truth stays `tab_translating_${tabId}` in
+  `storage.session`;
+- `startTranslationForTab` now fires `executeScript` at mail surfaces without
+  awaiting it (its promise may never settle) so a message displayed before
+  registration can still get the script. The per-window guard in `inject.js`
+  cannot dedupe that from the registered script's copy (different JS worlds),
+  so `inject.js` marks its document with `data-imp-script` in the shared DOM.
+
+**Verification list**:
+
+- Alt+T on the current message translates it; Alt+T again restores it — on
+  all three reading surfaces, including a message that was already displayed
+  when the add-on loaded
+- translating on + switch message → icon stays and the new message
+  translates; translating off + switch → stays off
+- toolbar icon and popup agree with the real state at every step
+- forced re-translate re-walks once, not twice (revision de-duplication)
+- web tabs unchanged: toggle, reload-clears, sub-frame continuation —
+  `pnpm e2e` stays green
+
+**Open questions**: none blocking. If a wake-up is ever missed, check TB's
+`storage.onChanged` delivery for `storage.local` in display scripts first;
+the direct message and auto-init cover that case in the meantime.

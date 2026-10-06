@@ -22,10 +22,10 @@ works in both.
 | `commands.getAll / update / onCommand` | 66 | hotkeys. `commands.update()` — which the code feature-detects and falls back without on Chrome — **is** supported in Thunderbird, so `applyHotkey` runs its real path and the options page's "can't apply on Chrome" copy is unnecessarily pessimistic there |
 | `scripting.executeScript` — `files`, `func` + `args`, `target.frameIds` / `allFrames`, `injectImmediately` | 102 | `injectContentScript` and the inline reload check in `background.ts`; `world: 'MAIN'` since 128 if ever needed |
 | `scripting.messageDisplay.registerScripts` | 128 | auto-inject `inject.js` into displayed messages — spike-verified working on all three reading surfaces incl. the 3-pane preview pane (`mail` tab); requires `messagesRead` + `scripting` |
-| `messageDisplay.onMessagesDisplayed` | 81 (MV3 name) | trigger/state-reset point; second arg is a `MessageList`; requires `messagesRead`. Spike-verified with a stable `tabId` across switches |
+| `messageDisplay.onMessagesDisplayed` | 81 (MV3 name) | per-message hook (keeps translation running across switches, re-applies the icon); second arg is a `MessageList`; requires `messagesRead`. Spike-verified with a stable `tabId` across switches |
 | `runtime.onInstalled / onStartup / openOptionsPage / getPlatformInfo / getManifest` | 45–52 | lifecycle hooks, options link |
 | `tabs.query / get / remove / onRemoved` | 62 | active-tab lookup (`sender.tab?.id` fallback), session-key cleanup |
-| `runtime.sendMessage → tabs.sendMessage(tabId, msg, { frameId })`, `sender.tab` / `sender.frameId` | 82 | the whole `@webext-core/messaging` RPC layer, including frame-targeted `startTranslation` |
+| `runtime.sendMessage → tabs.sendMessage(tabId, msg, { frameId })`, `sender.tab` / `sender.frameId` | 82 | the whole `@webext-core/messaging` RPC layer, including frame-targeted `startTranslation`. Caveat (TB-3): content → background (`runtime.sendMessage`, `sender.tab`) is spike-verified; **background → displayed-message** (`tabs.sendMessage`) is not — mail commands are duplicated over `storage.local` wake-ups so a missing delivery is harmless |
 | `webNavigation.onCommitted / onDOMContentLoaded / onErrorOccurred` with `transitionType` | 45 | translation continuation across navigation, reload detection |
 | `host_permissions` (`<all_urls>`) | yes | background `fetch` to translation providers |
 

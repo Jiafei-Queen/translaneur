@@ -75,23 +75,28 @@ Their mail-display equivalents need the same ordering guarantees around
 tab.
 
 Delivery note from the spike: `registerScripts` and `executeScript` run in
-**different JS worlds** — `window` state is not shared between them. With a
-single delivery path (registered scripts only) this is moot; a mixed
-delivery would need DOM-borne state.
+**different JS worlds** — `window` state is not shared between them. The port
+ended up with a mixed delivery (registered script plus an `executeScript`
+fallback for messages displayed before registration), so `inject.js` marks
+its document with a DOM attribute (`data-imp-script`) to dedupe across
+worlds — the DOM is the only state they share.
 
 Double-duty adjustment: the spike showed `executeScript` hangs on `mail`
 tabs and just-created `messageDisplay` tabs, so `injectContentScript`'s
-on-demand path stays limited to `content` tabs exactly as in the browser;
-mail surfaces get the registered script only. The `reload` check
-(`performance.getEntriesByType('navigation')`) does not apply to messages;
-switching message resets state instead.
+on-demand path is *fired without awaiting* for mail surfaces (a hung promise
+must not block the command wake-ups) and awaited exactly as in the browser
+for content tabs. The `reload` check
+(`performance.getEntriesByType('navigation')`) does not apply to messages; a
+message switch is a navigation and keeps translating.
 
 **State keying** — `tab_translating_${tabId}` keys translating state by tab,
 but a message-display tab shows a *sequence* of messages. Key per
 `(tabId, messageId)` — `messageDisplay.getDisplayedMessages(tabId)` (MV3;
-returns a `MessageList`) supplies the id — or accept tab-level state and
-reset on every `onMessagesDisplayed`. Decide during implementation;
-`storage.session` supports either.
+returns a `MessageList`) supplies the id — or accept tab-level state that
+survives each `onMessagesDisplayed`. Decide during implementation;
+`storage.session` supports either. (Decided — see "What Step 3 actually
+implemented" below: tab-level state, and a switch keeps translating rather
+than resetting it.)
 
 ## What Step 3 actually implemented
 
@@ -110,29 +115,35 @@ thunderbird` branch.
 - Registration: `registerMailInjectScript()` registers the unlisted
   `/inject.js` (`id: imp-mail-inject`, `runAt: document_idle`) — idempotent,
   duplicates reject with "already registered" and serve as the no-op
-- Tab triage: `startTranslationForTab` fetches the tab first and skips
-  `executeScript` for `tab.type` `mail` / `messageDisplay` — those get
-  `inject.js` from the registration; per the hanging quirk no executeScript
-  fallback is attempted for mail surfaces (a hung inject would leave the
-  `startTranslation` message unsent — worse than a missing script)
-- State keying decision: **tab-level key retained** + reset on every
-  `onMessagesDisplayed` — the key drives the popup and the action icon, and
-  both would need re-keying for `(tabId, messageId)`; the display document is
-  rewritten per message anyway (probe 4), so tab-level state is correct as
-  long as each switch clears it
-- Switch-as-reload: the `onMessagesDisplayed` handler clears the key (the
-  `transitionType` check's replacement) using the natural order — the display
-  event precedes the registered script's `document_idle` injection, and the
-  new document's auto-init reads exactly this key, so the clear usually wins
-  outright. The two-hop race the ordering cannot fully close (auto-init read
-  the key one beat before the clear) gets a best-effort `stopTranslation`
-  message as backstop, mirroring the browser build's BFCache re-check wait in
-  `inject.ts`
-- Deviation from the skeleton above: messages already open at background
-  startup are **not** executeScript-injected — the hang risk applies to them
-  exactly, and their next message switch re-injects via the registration.
-  Cost: a mail tab shown before the background's first wake displays without
-  the button working until the user switches messages or reloads the window.
+- Tab triage: `startTranslationForTab` fetches the tab first and awaits
+  `executeScript` for content tabs only. For `tab.type` `mail` /
+  `messageDisplay` it *fires* executeScript without awaiting (the promise may
+  never settle, spike probe 3) as a fallback for messages displayed before
+  the registration landed, and delivers the command over two channels stamped
+  with one revision (see below); the browser path keeps the direct
+  `startTranslation` message
+- Command delivery: `tabs.sendMessage` to a displayed message is unverified
+  (the spike only ever messaged *from* display documents), so start/stop also
+  ride `tab_wakeup_${tabId}` in `storage.local` (`storage.session` is not
+  exposed to content scripts; the wake-up is a command, not state — the truth
+  stays the session key). `inject.js` listens for its own wake-up and applies
+  each command revision once, so the message + wake-up double delivery costs
+  one walk
+- State keying decision: **tab-level key retained** — the key drives the
+  popup and the action icon, and both would need re-keying for
+  `(tabId, messageId)`. The display document is rewritten per message (probe
+  4), so the key outlives any one document and stays correct across switches
+- Switch-as-navigation (revised after TB-3): a message switch keeps
+  translating — the `onMessagesDisplayed` handler clears nothing (it only
+  re-applies the icon) and the fresh document's auto-init picks the same
+  session key up and translates the new message. This replaces the first
+  implementation's switch-as-reload clear, which turned translation off on
+  every switch and raced the new document's auto-init (see
+  [bugs.md](bugs.md) TB-3)
+- Messages already open at background startup get `inject.js` from the
+  executeScript fallback fired on the first start command; if that lands
+  nothing (the hang quirk), the next message switch re-injects via the
+  registration
 
 ## Tier 3 — resolved by the spike
 

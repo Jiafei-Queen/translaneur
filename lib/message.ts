@@ -14,6 +14,27 @@ export interface TranslateBatchRequest {
   targetLang: string
 }
 
+// A remote command (hotkey / popup) as carried over storage. Thunderbird's
+// displayed messages cannot be messaged reliably from the background
+// (docs/thunderbird/bugs.md TB-3), but their scripts do see storage.onChanged
+// — for storage.local only, since storage.session is not exposed to content
+// scripts. Commands therefore ride a per-tab `tab_wakeup_${tabId}` key in
+// storage.local next to the direct message. This is a command, not state: the
+// truth stays `tab_translating_${tabId}` in storage.session, and a stale
+// wake-up is inert because nothing ever re-reads it.
+export interface TabWakeup {
+  lang: string | null
+  force?: boolean
+  showToast?: boolean
+  // Command revision, shared with the startTranslation message so the two
+  // deliveries of one command apply once — a forced start re-walks the page,
+  // so a double apply walks (and bills) it twice. A command without a
+  // revision always applies.
+  rev?: number
+}
+
+export const TAB_WAKEUP_PREFIX = 'tab_wakeup_'
+
 // One protocol for both directions: extension page/content script → background
 // with no target (runtime messaging), and background → content script with an
 // explicit target. `@webext-core/messaging` picks the API from the send
@@ -46,6 +67,9 @@ export const messager = defineExtensionMessaging<{
   stopTab(data: { tabId: number }): void
   getTabState(data: { tabId: number }): string | null
   getSelfTabState(): string | null
+  // The calling content script's tab id — lets a displayed message match
+  // itself against its per-tab storage wake-up (TabWakeup).
+  getSelfTabId(): number | null
   stopSelfTab(): void
   startSelfTab(data: { targetLang: string }): void
   isMobile(): boolean
@@ -81,6 +105,8 @@ export const messager = defineExtensionMessaging<{
     showToast?: boolean
     rules: SiteRule[]
     force?: boolean
+    // See TabWakeup.rev. Omit for a bare start, which always applies.
+    rev?: number
   }): void
   stopTranslation(): void
   getState(): boolean

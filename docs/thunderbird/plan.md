@@ -84,14 +84,15 @@ assumes pages arrive by web navigation (~200–300 lines).
 - triage injected targets by `tab.type` (`messageDisplay` | `content` | `mail`);
   the 3-pane preview pane is a `mail` tab and is covered by registered scripts
 - state-key decision (made, see [port.md](port.md)): tab-level
-  `tab_translating_${tabId}` is retained, reset on every
-  `onMessagesDisplayed` — the key drives the popup and the action icon, and
-  the display document is rewritten per message anyway; a switch is treated
-  as the navigation that mail never fires
+  `tab_translating_${tabId}` is retained — the key drives the popup and the
+  action icon, and the display document is rewritten per message anyway. A
+  switch is a navigation: translating stays on and each new document's
+  auto-init picks the key up (see [bugs.md](bugs.md) TB-3 for the first
+  implementation's switch-as-reload regression)
 - preserve the existing race-pattern *semantics*, not its code: write the
   session key before content-script state flips, an in-flight barrier keyed by
-  tab, state cleared on message switch (replacing the `transitionType` reload
-  check, which never fires for mail)
+  tab, state cleared only where the web build clears it (tab close, web
+  reload — mail display never fires `transitionType`)
 
 Gate: the toolbar button / `Alt+T` translates and restores an opened mail. At
 this point the port's spine is through.

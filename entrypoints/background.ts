@@ -1,5 +1,5 @@
 import { checkConnection, exchangeCode, humanizeError } from '@rxliuli/imp-credits-sdk'
-import { messager } from '@/lib/message'
+import { messager, type TabWakeup, TAB_WAKEUP_PREFIX } from '@/lib/message'
 import { getSettings, saveSettings, peekSettings, type TranslationProvider } from '@/lib/storage'
 import { translate } from '@/lib/translator'
 import { getCached, setCached, evictOldEntries } from '@/lib/cache'
@@ -120,6 +120,34 @@ async function setTabTranslatingLang(tabId: number, lang: string | null) {
   }
 }
 
+// Remote commands ride storage next to the direct message: a displayed
+// message's script may be absent, and background→content messages are not
+// reliable on mail surfaces (docs/thunderbird/bugs.md TB-3) — but content
+// scripts do see storage.onChanged, for storage.local only (storage.session
+// is not exposed to them). See TabWakeup: a wake-up is a command, not state.
+let commandRev = 0
+
+// Wake-up keys name tab ids that die with the session, so clear the ones a
+// previous session left behind. Started at module load and awaited by the
+// writes below, so an early command can't be purged after it landed.
+const wakeupsReady = (async () => {
+  const all = await browser.storage.local.get(null)
+  const stale = Object.keys(all).filter((k) => k.startsWith(TAB_WAKEUP_PREFIX))
+  if (stale.length > 0) await browser.storage.local.remove(stale)
+})()
+
+async function ringTabWakeup(
+  tabId: number,
+  wakeup: Omit<TabWakeup, 'rev'>,
+): Promise<number> {
+  await wakeupsReady
+  const rev = ++commandRev
+  await browser.storage.local.set({
+    [`${TAB_WAKEUP_PREFIX}${tabId}`]: { ...wakeup, rev },
+  })
+  return rev
+}
+
 // Chromium has no theme-aware toolbar icon API: no `theme_icons`, raster
 // formats only, and no theme-change event. The same pixels therefore have to
 // read on both the light and the dark toolbar, which caps the artwork at
@@ -167,28 +195,35 @@ async function startTranslationForTab(
 
   const tab = await browser.tabs.get(tabId)
   // Mail surfaces take inject.js from the registered message-display script,
-  // in place since startup, so the displayed document already has it. Do not
-  // fall back to executeScript for them: it hangs instead of failing on
-  // `mail` and just-created `messageDisplay` tabs (spike probe 3), and a hung
-  // inject would leave the startTranslation message below unsent.
-  if (!isMailSurfaceTab(tab as unknown as { type?: string })) {
+  // in place since startup, so the displayed document usually has it. Do not
+  // await executeScript for them: on `mail` and just-created `messageDisplay`
+  // tabs its promise can fail to settle (spike probe 3), and a hung inject
+  // would leave the wake-ups below unsent. Fire it anyway — for a message
+  // displayed before the registration landed it is the only way in, and the
+  // injection itself may still land. inject.js marks its document in the
+  // DOM, so one that gets both deliveries still runs a single pipeline.
+  if (isMailSurfaceTab(tab as unknown as { type?: string })) {
+    void injectContentScript(tabId).catch(() => {})
+  } else {
     await injectContentScript(tabId)
     t('injectContentScript done')
   }
 
-  // Also send startTranslation directly. The content script's auto-init
-  // only fires on FIRST injection; if inject.js was already loaded (e.g.
-  // after stop + start for language switching), the second injection is a
-  // no-op (__imp_injected guard) and auto-init never re-runs. The explicit
-  // message is the reliable way to wake the content script back up.
-  //
-  // This is safe w.r.t. onDOMContentLoaded races: non-main frames no
-  // longer send startTranslation (they only inject), and the main frame's
-  // duplicate is handled by the content script's isTranslating guard.
+  // Wake the content script over two channels stamped with one revision: the
+  // storage wake-up (reaches mail display scripts) and the direct message
+  // (the browser path). The content script applies a revision once.
+  const rev = await ringTabWakeup(tabId, { lang: targetLang, force, showToast })
+  t('ringTabWakeup done')
   const rules = await getMatchedRulesForHostname(hostnameFromUrl(tab.url))
   t('rules fetched')
-  await messager.sendMessage('startTranslation', { targetLang, showToast, rules, force }, { tabId })
-  t('startTranslation sent')
+  try {
+    await messager.sendMessage('startTranslation', { targetLang, showToast, rules, force, rev }, { tabId })
+    t('startTranslation sent')
+  } catch {
+    // No receiver — a displayed message without the script, or a mail
+    // surface tabs.sendMessage cannot reach. The wake-up above is the
+    // delivery that survives; state and icon are already consistent.
+  }
 }
 
 async function stopTranslationForTab(tabId: number) {
@@ -197,6 +232,7 @@ async function stopTranslationForTab(tabId: number) {
   } catch {
     // Content script may not be loaded
   }
+  await ringTabWakeup(tabId, { lang: null })
   await browser.action.setIcon({ tabId, path: defaultIcon })
   await setTabTranslatingLang(tabId, null)
 }
@@ -209,11 +245,25 @@ async function isPageTranslating(tabId: number): Promise<boolean> {
   }
 }
 
+// Whether to treat the tab as translating when toggling. The session key is
+// the authority: it drives the icon and the popup, and it is the only state a
+// mail surface has — a displayed message's script may be absent, and
+// background→content messages are not reliable there (TB-3), so a getState
+// round trip can answer "idle" for a tab that is translating. The content
+// script's own state is kept as a second chance for web tabs only, covering
+// the one desync where the key was cleared while a run is still live.
+async function isTabActivelyTranslating(tab: { id?: number; type?: string }): Promise<boolean> {
+  if (!tab.id) return false
+  if (await getTabTranslatingLang(tab.id)) return true
+  if (isMailSurfaceTab(tab)) return false
+  return isPageTranslating(tab.id)
+}
+
 async function toggleTranslationForActiveTab() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
   if (!tab?.id) return
   if (isPdfUrl(tab.url)) return
-  if (await isPageTranslating(tab.id)) {
+  if (await isTabActivelyTranslating(tab as unknown as { type?: string })) {
     await stopTranslationForTab(tab.id)
   } else {
     const settings = await getSettings()
@@ -243,7 +293,7 @@ async function openPanelForActiveTab() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
   if (!tab?.id) return
   if (isPdfUrl(tab.url)) return
-  if (await isPageTranslating(tab.id)) {
+  if (await isTabActivelyTranslating(tab as unknown as { type?: string })) {
     await stopTranslationForTab(tab.id)
     return
   }
@@ -527,6 +577,10 @@ export default defineBackground(() => {
     return await getTabTranslatingLang(tabId)
   })
 
+  messager.onMessage('getSelfTabId', async ({ sender }) => {
+    return sender.tab?.id ?? null
+  })
+
   messager.onMessage('stopSelfTab', async ({ sender }) => {
     const tabId = sender.tab?.id
     if (!tabId) return
@@ -674,30 +728,22 @@ export default defineBackground(() => {
 
   browser.tabs.onRemoved.addListener(async (tabId) => {
     await browser.storage.session.remove(`tab_translating_${tabId}`)
+    await browser.storage.local.remove(`${TAB_WAKEUP_PREFIX}${tabId}`)
   })
 
   // The mail-display counterpart of the onCommitted/onDOMContentLoaded pair
   // above. A message tab displays a sequence of documents — one per message,
-  // rewritten on every switch (spike probe 4) — so a switch is the reload the
-  // transitionType check up there can never see; and mail display is not a
-  // navigation, so those listeners never fire for it.
+  // rewritten on every switch (spike probe 4) — and mail display is not a
+  // navigation, so those listeners never fire for it. A switch is a
+  // navigation, not a reload: translating stays on, and the fresh document's
+  // auto-init reads the same session key and translates the new message.
+  // Only the icon is touched here — per-tab icons reset with the document.
   void registerMailInjectScript()
   messageDisplay()?.onMessagesDisplayed.addListener(async (tab) => {
     const tabId = tab.id
     if (!tabId) return
-    // Clear before anything can read it: the display event precedes the
-    // registered script's document_idle injection, and the fresh document's
-    // auto-init reads exactly this session key.
     const lang = await getTabTranslatingLang(tabId)
-    if (!lang) return
-    await setTabTranslatingLang(tabId, null)
-    await browser.action.setIcon({ tabId, path: defaultIcon })
-    // Belt for the one ordering this can't close: auto-init read the key a
-    // beat before the clear and started the new message. Harmless when
-    // nothing started (content script absent → catch).
-    try {
-      await messager.sendMessage('stopTranslation', undefined, { tabId })
-    } catch {}
+    if (lang) await browser.action.setIcon({ tabId, path: activeIcon })
   })
 
   if (import.meta.env.DEV) {
