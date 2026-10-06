@@ -39,6 +39,60 @@ function hostnameFromUrl(url: string | undefined): string {
   }
 }
 
+// Thunderbird-only namespaces are absent from the shared @wxt-dev/browser
+// type surface; the shapes here are spike-verified (docs/thunderbird/
+// spike.md). Runtime feature detection: in the browser builds these resolve
+// to undefined and the mail pipeline never activates, so one file serves all
+// three targets without a build-time branch.
+interface MailScripting {
+  messageDisplay: {
+    registerScripts(details: {
+      id: string
+      js: string[]
+      runAt: 'document_idle'
+    }): Promise<unknown>
+  }
+}
+
+interface MailMessageDisplay {
+  onMessagesDisplayed: {
+    addListener(listener: (tab: { id?: number }, messageList: unknown) => void): void
+  }
+}
+
+function messageDisplayScripts(): MailScripting['messageDisplay'] | undefined {
+  const ns = (browser.scripting as unknown as Partial<MailScripting>)?.messageDisplay
+  return typeof ns?.registerScripts === 'function' ? ns : undefined
+}
+
+function messageDisplay(): MailMessageDisplay | undefined {
+  const ns = (browser as unknown as { messageDisplay?: MailMessageDisplay }).messageDisplay
+  return typeof ns?.onMessagesDisplayed?.addListener === 'function' ? ns : undefined
+}
+
+// tab.type is Gecko-only (and untyped in the shared surface). The 3-pane
+// preview pane reports `mail`; a message tab or a stand-alone message window
+// reports `messageDisplay`.
+function isMailSurfaceTab(tab: { type?: string }): boolean {
+  return tab.type === 'mail' || tab.type === 'messageDisplay'
+}
+
+// inject.js auto-injects into every displayed message — message tab,
+// stand-alone window, and the 3-pane preview pane alike (spike probe 3).
+// A second call in one session rejects with "already registered"; the
+// registration persists for the session, which is all we need.
+async function registerMailInjectScript(): Promise<void> {
+  const api = messageDisplayScripts()
+  if (!api) return
+  try {
+    await api.registerScripts({
+      id: 'imp-mail-inject',
+      js: ['/inject.js'],
+      runAt: 'document_idle',
+    })
+  } catch {}
+}
+
 async function injectContentScript(tabId: number, frameId?: number) {
   const t = debugTime(`injectContentScript(tabId=${tabId}${frameId !== undefined ? `, frameId=${frameId}` : ''})`)
   const target = frameId !== undefined
@@ -110,8 +164,17 @@ async function startTranslationForTab(
   t('setTabTranslatingLang done')
   await browser.action.setIcon({ tabId, path: activeIcon })
   t('setIcon done')
-  await injectContentScript(tabId)
-  t('injectContentScript done')
+
+  const tab = await browser.tabs.get(tabId)
+  // Mail surfaces take inject.js from the registered message-display script,
+  // in place since startup, so the displayed document already has it. Do not
+  // fall back to executeScript for them: it hangs instead of failing on
+  // `mail` and just-created `messageDisplay` tabs (spike probe 3), and a hung
+  // inject would leave the startTranslation message below unsent.
+  if (!isMailSurfaceTab(tab as unknown as { type?: string })) {
+    await injectContentScript(tabId)
+    t('injectContentScript done')
+  }
 
   // Also send startTranslation directly. The content script's auto-init
   // only fires on FIRST injection; if inject.js was already loaded (e.g.
@@ -122,7 +185,6 @@ async function startTranslationForTab(
   // This is safe w.r.t. onDOMContentLoaded races: non-main frames no
   // longer send startTranslation (they only inject), and the main frame's
   // duplicate is handled by the content script's isTranslating guard.
-  const tab = await browser.tabs.get(tabId)
   const rules = await getMatchedRulesForHostname(hostnameFromUrl(tab.url))
   t('rules fetched')
   await messager.sendMessage('startTranslation', { targetLang, showToast, rules, force }, { tabId })
@@ -612,6 +674,30 @@ export default defineBackground(() => {
 
   browser.tabs.onRemoved.addListener(async (tabId) => {
     await browser.storage.session.remove(`tab_translating_${tabId}`)
+  })
+
+  // The mail-display counterpart of the onCommitted/onDOMContentLoaded pair
+  // above. A message tab displays a sequence of documents — one per message,
+  // rewritten on every switch (spike probe 4) — so a switch is the reload the
+  // transitionType check up there can never see; and mail display is not a
+  // navigation, so those listeners never fire for it.
+  void registerMailInjectScript()
+  messageDisplay()?.onMessagesDisplayed.addListener(async (tab) => {
+    const tabId = tab.id
+    if (!tabId) return
+    // Clear before anything can read it: the display event precedes the
+    // registered script's document_idle injection, and the fresh document's
+    // auto-init reads exactly this session key.
+    const lang = await getTabTranslatingLang(tabId)
+    if (!lang) return
+    await setTabTranslatingLang(tabId, null)
+    await browser.action.setIcon({ tabId, path: defaultIcon })
+    // Belt for the one ordering this can't close: auto-init read the key a
+    // beat before the clear and started the new message. Harmless when
+    // nothing started (content script absent → catch).
+    try {
+      await messager.sendMessage('stopTranslation', undefined, { tabId })
+    } catch {}
   })
 
   if (import.meta.env.DEV) {

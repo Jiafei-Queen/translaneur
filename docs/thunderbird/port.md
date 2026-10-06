@@ -93,6 +93,47 @@ returns a `MessageList`) supplies the id — or accept tab-level state and
 reset on every `onMessagesDisplayed`. Decide during implementation;
 `storage.session` supports either.
 
+## What Step 3 actually implemented
+
+In `entrypoints/background.ts` (2026-10-06) — the webNavigation pair is
+**kept, not replaced**: mail display is not a navigation so it never fires
+for messages, Thunderbird content tabs (a web page opened inside Thunderbird)
+keep the browser behaviour for free, and the file stays build-independent —
+the mail pipeline activates on runtime namespace presence, not a `-b
+thunderbird` branch.
+
+- Runtime detection: `browser.scripting.messageDisplay.registerScripts` and
+  `browser.messageDisplay.onMessagesDisplayed` are probed feature-detect
+  style; both are absent from the shared `@wxt-dev/browser` types, so
+  `background.ts` carries narrow local interfaces (the same tactic as the
+  manifest casts in `wxt.config.ts`)
+- Registration: `registerMailInjectScript()` registers the unlisted
+  `/inject.js` (`id: imp-mail-inject`, `runAt: document_idle`) — idempotent,
+  duplicates reject with "already registered" and serve as the no-op
+- Tab triage: `startTranslationForTab` fetches the tab first and skips
+  `executeScript` for `tab.type` `mail` / `messageDisplay` — those get
+  `inject.js` from the registration; per the hanging quirk no executeScript
+  fallback is attempted for mail surfaces (a hung inject would leave the
+  `startTranslation` message unsent — worse than a missing script)
+- State keying decision: **tab-level key retained** + reset on every
+  `onMessagesDisplayed` — the key drives the popup and the action icon, and
+  both would need re-keying for `(tabId, messageId)`; the display document is
+  rewritten per message anyway (probe 4), so tab-level state is correct as
+  long as each switch clears it
+- Switch-as-reload: the `onMessagesDisplayed` handler clears the key (the
+  `transitionType` check's replacement) using the natural order — the display
+  event precedes the registered script's `document_idle` injection, and the
+  new document's auto-init reads exactly this key, so the clear usually wins
+  outright. The two-hop race the ordering cannot fully close (auto-init read
+  the key one beat before the clear) gets a best-effort `stopTranslation`
+  message as backstop, mirroring the browser build's BFCache re-check wait in
+  `inject.ts`
+- Deviation from the skeleton above: messages already open at background
+  startup are **not** executeScript-injected — the hang risk applies to them
+  exactly, and their next message switch re-injects via the registration.
+  Cost: a mail tab shown before the background's first wake displays without
+  the button working until the user switches messages or reloads the window.
+
 ## Tier 3 — resolved by the spike
 
 The three unknowns are answered (see [spike.md](spike.md) Results):

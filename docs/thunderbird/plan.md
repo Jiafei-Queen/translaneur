@@ -83,11 +83,11 @@ assumes pages arrive by web navigation (~200–300 lines).
   `executeScript` hangs on `mail` and just-created `messageDisplay` tabs)
 - triage injected targets by `tab.type` (`messageDisplay` | `content` | `mail`);
   the 3-pane preview pane is a `mail` tab and is covered by registered scripts
-- state-key decision: per `tabId` or per `(tabId, messageId)` — a message tab
-  displays a *sequence* of messages, so the current
-  `tab_translating_${tabId}` key may over-persist; decide during
-  implementation (`storage.session` supports either; `getDisplayedMessages()`
-  supplies the message id)
+- state-key decision (made, see [port.md](port.md)): tab-level
+  `tab_translating_${tabId}` is retained, reset on every
+  `onMessagesDisplayed` — the key drives the popup and the action icon, and
+  the display document is rewritten per message anyway; a switch is treated
+  as the navigation that mail never fires
 - preserve the existing race-pattern *semantics*, not its code: write the
   session key before content-script state flips, an in-flight barrier keyed by
   tab, state cleared on message switch (replacing the `transitionType` reload
