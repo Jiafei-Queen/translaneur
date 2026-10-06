@@ -90,7 +90,17 @@ export default defineConfig({
       manifest.author = 'Jiafei'
       // Spike-verified (docs/thunderbird/spike.md): message display injection
       // needs messagesRead + scripting; messagesModify is not required.
-      manifest.permissions = [...(manifest.permissions ?? []), 'messagesRead']
+      // webNavigation serves only content tabs and mail display is not a
+      // navigation — drop it (minimal permissions for a future ATN listing);
+      // background.ts feature-detects the namespace before listening.
+      manifest.permissions = [
+        ...(manifest.permissions ?? []).filter((p) => p !== 'webNavigation'),
+        'messagesRead',
+      ]
+      // inject.js reaches message documents via registerScripts, which needs
+      // no web_accessible_resources; the browser builds keep their existing
+      // declaration.
+      delete manifest.web_accessible_resources
       // Thunderbird-only toolbar keys: show the button in the mail space of
       // the unified toolbar and in stand-alone message windows.
       manifest.action = {

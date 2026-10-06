@@ -623,7 +623,10 @@ export default defineBackground(() => {
   // earliest event we can hook — so the icon doesn't blink to default during
   // link nav. If the navigation turns out to be a reload, the reload branch
   // in onDOMContentLoaded below will revert it.
-  browser.webNavigation.onCommitted.addListener((details) => {
+  // The Thunderbird manifest drops webNavigation (mail display is not a
+  // navigation), so the namespace is absent there — feature-detect before
+  // listening rather than crash at startup.
+  browser.webNavigation?.onCommitted?.addListener((details) => {
     if (details.frameId !== 0) return
     // Publish the whole handler as an in-flight promise so a sub-frame's
     // onDOMContentLoaded can wait for the reload decision before reading the
@@ -651,7 +654,7 @@ export default defineBackground(() => {
     })
   })
 
-  browser.webNavigation.onDOMContentLoaded.addListener(async (details) => {
+  browser.webNavigation?.onDOMContentLoaded?.addListener(async (details) => {
     // Non-main frames (dynamically added iframes, sub-frames): drive them
     // explicitly from the background rather than letting inject.js self-start.
     // Sub-frame auto-init is disabled (it would read the session key on its
