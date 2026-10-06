@@ -31,6 +31,8 @@ jobs:
             echo "tag $GITHUB_REF_NAME does not match package.json version $version" >&2
             exit 1
           fi
+      - name: Assemble release body
+        run: node scripts/release-body.ts "${GITHUB_REF_NAME#v}" > "$RUNNER_TEMP/release-body.md"
       - run: pnpm zip
       - run: pnpm xpi:thunderbird
       - name: Build and sign Firefox xpi
@@ -43,8 +45,10 @@ jobs:
         run: mv web-ext-artifacts/*.xpi "translaneur-${GITHUB_REF_NAME#v}-firefox.xpi"
       - uses: softprops/action-gh-release@v3
         with:
+          name: Translaneur ${{ github.ref_name }}
+          body_path: ${{ runner.temp }}/release-body.md
+          generate_release_notes: true
           files: |
             .output/translaneur-*-chrome.zip
             translaneur-*-firefox.xpi
             .output/translaneur-*-thunderbird.xpi
-          generate_release_notes: true
