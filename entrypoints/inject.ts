@@ -72,9 +72,17 @@ export default defineUnlistedScript(() => {
     return allow.length > 0 ? allow : undefined
   })()
 
+  // Thunderbird's own header chrome (avatar / from / to tables) sits in the
+  // display document's body (spike probe 1) and would otherwise translate as
+  // page text — on the web, chrome is excluded, so the header is too.
+  const tbHeaderSkip = document.querySelector('table.moz-main-header')
+    ? ['table.moz-main-header']
+    : undefined
+
   const extractOpts: ExtractOptions = {
     get skipSelectors() {
-      return getActiveSelectors().skipSelectors
+      const rules = getActiveSelectors().skipSelectors
+      return tbHeaderSkip ? [...rules, ...tbHeaderSkip] : rules
     },
     get includeSelectors() {
       return getActiveSelectors().includeSelectors

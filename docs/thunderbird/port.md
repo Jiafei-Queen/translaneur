@@ -149,9 +149,10 @@ The three unknowns are answered (see [spike.md](spike.md) Results):
 - **Preview pane**: scriptable via `registerScripts` — no narrowing; the
   everyday surface is fully covered.
 
-Remaining spike-informed adjustments fold into tiers 1–2: skip the header
-chrome in extraction, single delivery path via `registerScripts`, and the
-MV3 API names noted above.
+Remaining spike-informed adjustments now fold into tiers 1–2: header chrome
+(`table.moz-main-header`) is skipped in the inject entry's `skipSelectors`
+(matched like site chrome, one lookup per document), delivery is the single
+`registerScripts` path, and the MV3 API names are noted above.
 
 ## Deliberately out of scope
 

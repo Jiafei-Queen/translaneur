@@ -81,6 +81,23 @@ describe('extractBlocks', () => {
     })
   })
 
+  describe('TB header chrome', () => {
+    it('skips moz-main-header tables out of the extraction', () => {
+      document.body.innerHTML = `
+        <table class="moz-header-part1 moz-main-header">
+          <tr><td class="displayname">Grace Hopper</td></tr>
+        </table>
+        <div class="moz-text-plain"><p>Newsletter body text</p></div>
+      `
+      const blocks = extractBlocks(document.body, {
+        skipSelectors: ['table.moz-main-header'],
+      })
+      expect(blocks.map((b) => stripMarkers(b.text))).toEqual([
+        'Newsletter body text',
+      ])
+    })
+  })
+
   describe('TB-2: Thunderbird HTML mail with a bare body pre', () => {
     // Some HTML mails ship their whole body as div.moz-text-html > pre with no
     // moz-quote-pre class (TB-2). The same pre skip pruned it, so the adapter

@@ -5,7 +5,8 @@ and fix direction. Fixed entries move to a "Fixed" section once verified.
 
 ## TB-1 — plain-text mail does not translate at all
 
-**Status — fix implemented, pending live verification.** `lib/dom.ts`
+**Status — fixed, verified live (TB 157; see also TB-2's verification).**
+`lib/dom.ts`
 `ExtractOptions` gained `allowSelectors` (un-skips a pruned tag when the
 element matches; site-rule and element-gate skips still apply), and the
 inject entry computes `allowSelectors: ['pre.moz-quote-pre']` once per
