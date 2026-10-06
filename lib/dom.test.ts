@@ -32,6 +32,82 @@ describe('extractBlocks', () => {
     expect(blocks[1].text).toBe('More text')
   })
 
+  describe('TB-1: Thunderbird plain-text mail', () => {
+    // TB renders text/plain as div.moz-text-plain > pre.moz-quote-pre and
+    // the whole body lives inside the pre.
+    const fixture = (body: string) =>
+      `<div class="moz-text-plain"><pre wrap class="moz-quote-pre">${body}</pre></div>`
+
+    it('still prunes the pre without allowSelectors', () => {
+      document.body.innerHTML = fixture('Long time no see')
+      expect(extractBlocks(document.body)).toHaveLength(0)
+    })
+
+    it('extracts and segments blank-line paragraphs when allowed', () => {
+      document.body.innerHTML = fixture('Dear Rina,\n\nsee you tomorrow.\n\nAya')
+      const blocks = extractBlocks(document.body, {
+        allowSelectors: ['pre.moz-quote-pre'],
+      })
+      expect(blocks.map((b) => stripMarkers(b.text))).toEqual([
+        'Dear Rina,',
+        'see you tomorrow.',
+        'Aya',
+      ])
+    })
+
+    it('extracts a single-paragraph body as one block', () => {
+      document.body.innerHTML = fixture('Long time no see')
+      const blocks = extractBlocks(document.body, {
+        allowSelectors: ['pre.moz-quote-pre'],
+      })
+      expect(blocks.map((b) => stripMarkers(b.text))).toEqual([
+        'Long time no see',
+      ])
+    })
+
+    it('leaves nested quoted pres behind the blockquote leaf gate', () => {
+      // Quotes nest one pre inside a blockquote; the blockquote extracts as a
+      // leaf (isBlockTag excludes pre) and never recurses — same path a web
+      // page's blockquote>pre takes. Whether mail quotes should translate is
+      // the open TB-1 question, not a property of this fix.
+      document.body.innerHTML = fixture(
+        '<blockquote type="cite"><pre wrap class="moz-quote-pre">said Bob</pre></blockquote>reply text',
+      )
+      const blocks = extractBlocks(document.body, {
+        allowSelectors: ['pre.moz-quote-pre'],
+      })
+      const texts = blocks.map((b) => stripMarkers(b.text))
+      expect(texts).toEqual(['reply text'])
+    })
+  })
+
+  describe('TB-2: Thunderbird HTML mail with a bare body pre', () => {
+    // Some HTML mails ship their whole body as div.moz-text-html > pre with no
+    // moz-quote-pre class (TB-2). The same pre skip pruned it, so the adapter
+    // widens the allow list to this selector.
+    const allow = ['pre.moz-quote-pre', 'div.moz-text-html > pre']
+    const fixture = (body: string) =>
+      `<div class="moz-text-html"><pre>${body}</pre></div>`
+
+    it('still prunes the bare pre without allowSelectors', () => {
+      document.body.innerHTML = fixture('Hello <b>there</b>')
+      expect(extractBlocks(document.body)).toHaveLength(0)
+    })
+
+    it('extracts the body when the bare pre is allowed', () => {
+      document.body.innerHTML = fixture('Hello <b>there</b>')
+      const blocks = extractBlocks(document.body, { allowSelectors: allow })
+      expect(blocks.map((b) => stripMarkers(b.text))).toEqual(['Hello there'])
+    })
+
+    it('leaves a web page pre skipped even when the allow list is passed', () => {
+      document.body.innerHTML =
+        '<div><pre class="shiki">npm install</pre><p>Some text</p></div>'
+      const blocks = extractBlocks(document.body, { allowSelectors: allow })
+      expect(blocks.map((b) => stripMarkers(b.text))).toEqual(['Some text'])
+    })
+  })
+
   it('should extract text from div with form controls as inline', () => {
     document.body.innerHTML = `
       <div class="tabs">

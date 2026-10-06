@@ -498,6 +498,10 @@ export default defineBackground(() => {
     await fetchRemoteRulesIfNeeded(true)
   })
 
+  messager.onMessage('diag', ({ data }) => {
+    console.info('[imp-diag]\n' + data)
+  })
+
   // Per WebExtension spec, per-tab action icons reset on navigation (Chrome +
   // Firefox follow this; Safari preserves them). Reapply on commit — the
   // earliest event we can hook — so the icon doesn't blink to default during

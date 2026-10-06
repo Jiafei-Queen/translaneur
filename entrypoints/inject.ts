@@ -29,6 +29,7 @@ import {
 } from '@/lib/render'
 import { saveSettings, type RenderMode } from '@/lib/storage'
 import { isUrlOnly, debugTime } from '@/lib/utils'
+import { describeExtraction } from '@/lib/diag'
 
 export default defineUnlistedScript(() => {
   const w = window as unknown as Record<string, unknown>
@@ -57,6 +58,20 @@ export default defineUnlistedScript(() => {
     return cachedSelectors
   }
 
+  // TB-1/TB-2: Thunderbird hides a mail's body inside a <pre> the walker's
+  // code-block skip would prune. Two shapes: text/plain renders as
+  // div.moz-text-plain > pre.moz-quote-pre (TB-1), and some HTML mails ship
+  // their whole body as a bare div.moz-text-html > pre (TB-2). Both selectors
+  // are Thunderbird-only, so on web pages this stays inert.
+  const tbMailPreAllow = (() => {
+    const allow: string[] = []
+    if (document.querySelector('pre.moz-quote-pre')) allow.push('pre.moz-quote-pre')
+    if (document.querySelector('div.moz-text-html > pre')) {
+      allow.push('div.moz-text-html > pre')
+    }
+    return allow.length > 0 ? allow : undefined
+  })()
+
   const extractOpts: ExtractOptions = {
     get skipSelectors() {
       return getActiveSelectors().skipSelectors
@@ -64,6 +79,7 @@ export default defineUnlistedScript(() => {
     get includeSelectors() {
       return getActiveSelectors().includeSelectors
     },
+    allowSelectors: tbMailPreAllow,
     onShadowRoot: (r) => attachShadowObserver(r),
   }
 
@@ -724,6 +740,14 @@ export default defineUnlistedScript(() => {
     t('observer created')
     const blocks = extractBlocks(document.body, extractOpts)
     t(`extractBlocks done — ${blocks.length} blocks`)
+    // Thunderbird diagnostics: with Debug Mode on, report what the extractor
+    // saw on this message/page; the background logs it as [imp-diag]. See
+    // lib/diag.ts.
+    if (debugMode) {
+      void messager
+        .sendMessage('diag', describeExtraction(document.body, blocks))
+        .catch(() => {})
+    }
     // The forced extraction: these elements, and only these, skip the cache
     // read. The blocks the IntersectionObserver reveals later come from this
     // same extraction, so a forced pass covers the page as the user scrolls it.

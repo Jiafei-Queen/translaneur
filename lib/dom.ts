@@ -164,6 +164,11 @@ export interface TranslatableBlock {
 
 export interface ExtractOptions {
   skipSelectors?: string[]
+  // Un-skips elements the tag-level skips (SKIP_TAGS) would prune: markup
+  // whose text legitimately hides in a skipped tag, e.g. Thunderbird's
+  // text/plain body inside pre.moz-quote-pre. Site-rule and element-gate
+  // skips still apply.
+  allowSelectors?: string[]
   includeSelectors?: string[]
   onShadowRoot?: (root: ShadowRoot) => void
 }
@@ -232,7 +237,9 @@ function passesElementGates(el: Element): boolean {
 
 function shouldSkip(el: Element, opts?: ExtractOptions): boolean {
   if (!passesSkipRules(el, opts)) return true
-  if (SKIP_TAGS.has(el.tagName.toLowerCase())) return true
+  if (SKIP_TAGS.has(el.tagName.toLowerCase())) {
+    if (!opts?.allowSelectors?.some((s) => el.matches(s))) return true
+  }
   return !passesElementGates(el)
 }
 

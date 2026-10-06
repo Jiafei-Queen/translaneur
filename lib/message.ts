@@ -52,6 +52,9 @@ export const messager = defineExtensionMessaging<{
   openOptionsPage(): void
   detectLanguageBatch(data: { texts: string[] }): string[]
   refreshRemoteRules(): void
+  // Temporary Thunderbird diagnostic: the content script reports what the
+  // extractor saw on a message, the background logs it. See lib/diag.ts.
+  diag(data: string): void
 
   // options page => background: apply the recorded shortcut for one command.
   // `applied` is false on Chrome, whose commands API has no update() — the
